@@ -1,0 +1,10 @@
+{
+  "actual_measurements_available": false,
+  "status": "unavailable",
+  "reason": "No RAPL counter or local Scaphandre host energy counter was detected.",
+  "platform": "win32",
+  "requested_repetitions": 10,
+  "completed_repetitions_per_model_task": 0,
+  "completed_measurements": 0,
+  "codecarbon_note": "CodeCarbon estimates are not written as actual energy measurements."
+}

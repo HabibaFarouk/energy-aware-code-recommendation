@@ -1,0 +1,5 @@
+model,feature_config,oof_pairs_over_50_j,mean_recommended_energy_j,mean_saving_vs_always_v0_j,total_saving_vs_always_v0_j
+logistic_regression,combined,3461,1875.8272060098238,993.6481797168449,3439016.35
+majority_baseline,combined,3461,2243.2051054608496,626.2702802658191,2167521.44
+random_forest,combined,3461,1856.1008870268709,1013.3744986997976,3507289.1399999997
+xgboost,combined,3461,1869.7236116729268,999.7517740537415,3460140.8899999997

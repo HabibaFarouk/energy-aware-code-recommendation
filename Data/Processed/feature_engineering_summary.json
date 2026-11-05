@@ -1,0 +1,20 @@
+{
+  "seed": 42,
+  "swap_probability": 0.5,
+  "rows_after_cleaning": 21428,
+  "tied_pairs_excluded": 18,
+  "unparseable_pairs_excluded": 0,
+  "training_rows": 21410,
+  "target": "energy_winner (1 means current V1 uses less energy; 0 means current V0 uses less)",
+  "group_column": "group_id",
+  "codebert_experiment": {
+    "prepared_text_columns": [
+      "code_v0_no_empty_lines",
+      "code_v1_no_empty_lines"
+    ],
+    "target": "energy_winner",
+    "group_column": "group_id",
+    "implemented": false,
+    "note": "The paired text and grouped target are saved; a CodeBERT fine-tuning run requires torch and transformers."
+  }
+}

@@ -1,0 +1,1 @@
+model,task,backend,repetitions,mean_net_energy_joules,std_net_energy_joules,mean_gross_energy_joules,mean_idle_baseline_joules,inference_pairs
