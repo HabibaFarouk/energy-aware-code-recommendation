@@ -1,0 +1,31 @@
+# Python environment
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Jupyter temporary files
+.ipynb_checkpoints/
+
+# VS Code settings
+.vscode/
+
+# Temporary files
+*.log
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.key
+
+# Large generated model files
+*.pkl
+*.joblib
+*.pt
+*.pth
+*.h5
+
+*.Data/Raw/public_classified_smells.jsonl 
+
+# Temporary experiment outputs
