@@ -1,0 +1,31 @@
+{
+  "dataset": "validated",
+  "feature_config": "config_B",
+  "feature_columns": [
+    "loc_delta",
+    "token_count_delta",
+    "ast_node_count_delta",
+    "cyclomatic_complexity_delta",
+    "loop_count_delta",
+    "nested_loop_depth_delta",
+    "conditional_count_delta",
+    "function_count_delta",
+    "max_nesting_depth_delta",
+    "function_call_count_delta",
+    "comprehension_count_delta",
+    "sort_call_count_delta",
+    "recursion_detected_delta",
+    "import_count_delta",
+    "builtin_call_count_delta"
+  ],
+  "zero_variance_features_removed": [],
+  "target": "energy_winner",
+  "group_column": "group_id",
+  "group_kfold_splits": 5,
+  "models": [
+    "majority_baseline",
+    "logistic_regression",
+    "random_forest",
+    "xgboost"
+  ]
+}

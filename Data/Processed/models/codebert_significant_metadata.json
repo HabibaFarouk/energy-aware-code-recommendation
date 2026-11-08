@@ -1,0 +1,25 @@
+{
+  "model_id": "microsoft/codebert-base",
+  "encoder_frozen": true,
+  "pooling": "attention-mask mean pooling",
+  "max_length": 256,
+  "classifier": "StandardScaler + class-balanced LogisticRegression",
+  "feature_layout": [
+    "embedding_v0",
+    "embedding_v1",
+    "embedding_v1_minus_v0"
+  ],
+  "dataset": "Data/Processed/significant_energy_diff.parquet",
+  "n_pairs": 3000,
+  "n_problem_groups": 476,
+  "class_counts": {
+    "1": 2337,
+    "0": 663
+  },
+  "group_column": "problem_id",
+  "group_kfold_splits": 5,
+  "embedding_seconds": 813.4330519000068,
+  "embedding_unique_code_count": 5848,
+  "classifier_path": "Data/Processed/models/codebert_significant_head.joblib",
+  "pretrained_encoder_weights": "Loaded by model id from the Hugging Face cache when needed."
+}

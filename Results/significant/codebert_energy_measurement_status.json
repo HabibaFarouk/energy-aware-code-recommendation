@@ -1,0 +1,6 @@
+{
+  "dataset": "significant",
+  "status": "not_run",
+  "actual_measurements_available": false,
+  "reason": "Set RUN_CODEBERT_MEASUREMENTS = True to opt in."
+}

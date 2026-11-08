@@ -1,0 +1,6 @@
+model,dataset,fold,roc_auc,balanced_accuracy,f1,train_groups,validation_groups
+codebert_frozen_embeddings_logistic_regression,significant_energy_diff,1,0.7013129102844639,0.6311839145537176,0.7963594994311718,382,94
+codebert_frozen_embeddings_logistic_regression,significant_energy_diff,2,0.7682025516153372,0.6904794567528637,0.8344370860927153,382,94
+codebert_frozen_embeddings_logistic_regression,significant_energy_diff,3,0.7492388830801403,0.6659696168276033,0.8073394495412844,380,96
+codebert_frozen_embeddings_logistic_regression,significant_energy_diff,4,0.6801657426657427,0.6117463617463618,0.7871853546910755,380,96
+codebert_frozen_embeddings_logistic_regression,significant_energy_diff,5,0.76248,0.641,0.866734486266531,380,96

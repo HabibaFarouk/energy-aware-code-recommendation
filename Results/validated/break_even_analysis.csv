@@ -1,0 +1,13 @@
+model,feature_config,training_energy_j_per_fit,inference_energy_j_per_measured_batch,inference_pairs_per_batch,inference_energy_j_per_pair,mean_saving_vs_always_v0_j_per_pair_over_50_j,net_saving_j_per_pair_after_inference,break_even_recommendations,status
+logistic_regression,combined,,,,,993.6481797168449,,,Unavailable: no actual hardware energy measurements for both training and inference.
+logistic_regression,config_A,,,,,986.8923114706732,,,Unavailable: no actual hardware energy measurements for both training and inference.
+logistic_regression,config_B,,,,,988.326827506501,,,Unavailable: no actual hardware energy measurements for both training and inference.
+majority_baseline,combined,,,,,626.2702802658191,,,Unavailable: no actual hardware energy measurements for both training and inference.
+majority_baseline,config_A,,,,,626.2702802658191,,,Unavailable: no actual hardware energy measurements for both training and inference.
+majority_baseline,config_B,,,,,626.2702802658191,,,Unavailable: no actual hardware energy measurements for both training and inference.
+random_forest,combined,,,,,1013.3744986997976,,,Unavailable: no actual hardware energy measurements for both training and inference.
+random_forest,config_A,,,,,963.2025946258306,,,Unavailable: no actual hardware energy measurements for both training and inference.
+random_forest,config_B,,,,,969.2796937301358,,,Unavailable: no actual hardware energy measurements for both training and inference.
+xgboost,combined,,,,,999.7517740537415,,,Unavailable: no actual hardware energy measurements for both training and inference.
+xgboost,config_A,,,,,952.2074862756429,,,Unavailable: no actual hardware energy measurements for both training and inference.
+xgboost,config_B,,,,,958.7445622652411,,,Unavailable: no actual hardware energy measurements for both training and inference.
