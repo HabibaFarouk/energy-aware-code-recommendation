@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
-from sklearn.model_selection import GroupKFold
+from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -21,6 +21,7 @@ def train_tabular_configurations(
     results_dir,
     model_dir,
     n_splits=5,
+    save_fold_models=False,
 ):
     if selected_feature_config not in feature_configurations:
         raise ValueError(f"Unknown selected feature configuration: {selected_feature_config}")
@@ -56,18 +57,34 @@ def train_tabular_configurations(
                 GroupKFold(n_splits=n_splits).split(features, target, groups), start=1
             ):
                 train_features = features.iloc[train_idx]
-                active_columns = train_features.columns[
-                    train_features.nunique(dropna=False) > 1
-                ].tolist()
-                if not active_columns:
-                    raise ValueError(
-                        f"All {dataset_name}/{config_name} features are constant in fold {fold}."
-                    )
-
                 model = factory()
-                model.fit(train_features[active_columns], target.iloc[train_idx])
+                model.fit(train_features, target.iloc[train_idx])
+                if save_fold_models and config_name == selected_feature_config:
+                    fold_model_dir = config_model_dir / "fold_models"
+                    fold_model_dir.mkdir(parents=True, exist_ok=True)
+                    joblib.dump(
+                        model,
+                        fold_model_dir / f"{model_name}_fold_{fold}.joblib",
+                    )
+                    fold_metadata = {
+                        "dataset": dataset_name,
+                        "feature_config": config_name,
+                        "model": model_name,
+                        "fold": fold,
+                        "feature_columns": list(columns),
+                        "group_column": "group_id",
+                        "train_groups": sorted(
+                            groups.iloc[train_idx].astype(str).unique().tolist()
+                        ),
+                        "validation_groups": sorted(
+                            groups.iloc[valid_idx].astype(str).unique().tolist()
+                        ),
+                    }
+                    (fold_model_dir / f"{model_name}_fold_{fold}.json").write_text(
+                        json.dumps(fold_metadata, indent=2), encoding="utf-8"
+                    )
                 truth = target.iloc[valid_idx]
-                valid_features = features.iloc[valid_idx][active_columns]
+                valid_features = features.iloc[valid_idx]
                 prediction = model.predict(valid_features).astype(int)
                 try:
                     probability = model.predict_proba(valid_features)[:, 1]
@@ -89,7 +106,6 @@ def train_tabular_configurations(
                     "f1": f1_score(truth, prediction, zero_division=0),
                     "train_groups": int(groups.iloc[train_idx].nunique()),
                     "validation_groups": int(groups.iloc[valid_idx].nunique()),
-                    "constant_features_removed": len(columns) - len(active_columns),
                 })
                 oof_frames.append(pd.DataFrame({
                     "dataset": dataset_name,
@@ -107,19 +123,13 @@ def train_tabular_configurations(
                     "was_swapped": frame.iloc[valid_idx]["was_swapped"].to_numpy(),
                 }))
 
-            active_columns = features.columns[features.nunique(dropna=False) > 1].tolist()
-            if not active_columns:
-                raise ValueError(f"All {dataset_name}/{config_name} features are constant.")
             final_model = factory()
-            final_model.fit(features[active_columns], target)
+            final_model.fit(features, target)
             joblib.dump(final_model, config_model_dir / f"{model_name}.joblib")
             config_metadata = {
                 "dataset": dataset_name,
                 "feature_config": config_name,
-                "feature_columns": active_columns,
-                "zero_variance_features_removed": [
-                    column for column in columns if column not in active_columns
-                ],
+                "feature_columns": list(columns),
                 "target": "energy_winner",
                 "group_column": "group_id",
                 "group_kfold_splits": n_splits,
@@ -130,7 +140,7 @@ def train_tabular_configurations(
             )
             if config_name == selected_feature_config:
                 selected_models[model_name] = final_model
-                selected_feature_columns[model_name] = active_columns
+                selected_feature_columns[model_name] = list(columns)
                 joblib.dump(final_model, model_dir / f"{model_name}.joblib")
 
     fold_metrics = pd.DataFrame(fold_rows)
@@ -153,6 +163,187 @@ def train_tabular_configurations(
         results_dir / "model_oof_predictions.parquet", index=False
     )
     return performance, selected_models, selected_feature_columns
+
+
+def run_grouped_config_b_ablation(
+    validated_frame,
+    significant_frame,
+    feature_columns,
+    model_factories,
+    results_dir,
+    n_repeats=5,
+    test_size=0.2,
+    bottom_percent=0.2,
+    minimum_low_importance_fits=3,
+    random_state=42,
+):
+    dataset_frames = {
+        "validated": validated_frame,
+        "significant": significant_frame,
+    }
+    required = {"group_id", "energy_winner"}
+    for dataset_name, frame in dataset_frames.items():
+        missing = sorted(required - set(frame.columns))
+        missing_features = sorted(set(feature_columns) - set(frame.columns))
+        if missing or missing_features:
+            raise ValueError(
+                f"{dataset_name} data is missing columns: {missing + missing_features}"
+            )
+        if frame["group_id"].isna().any() or frame["energy_winner"].nunique() != 2:
+            raise ValueError(f"{dataset_name} requires non-null groups and both target classes.")
+
+    shared_groups = set(validated_frame["group_id"]) & set(significant_frame["group_id"])
+    significant_groups = set(significant_frame["group_id"])
+    if significant_groups != shared_groups:
+        raise ValueError("Significant problem groups must all be present in validated data.")
+    if len(shared_groups) < 5:
+        raise ValueError("At least five shared problem groups are required for grouped splits.")
+    model_names = [
+        name for name in ("logistic_regression", "random_forest", "xgboost")
+        if name in model_factories
+    ]
+    if len(model_names) != 3:
+        raise ValueError("Importance-based selection requires Logistic Regression, Random Forest, and XGBoost.")
+    if not 0 < bottom_percent < 1:
+        raise ValueError("bottom_percent must be between zero and one.")
+    if not 1 <= minimum_low_importance_fits <= len(dataset_frames) * len(model_names):
+        raise ValueError("minimum_low_importance_fits is outside the number of dataset/model fits.")
+
+    unique_groups = np.array(sorted(shared_groups, key=str), dtype=object)
+    splitter = GroupShuffleSplit(
+        n_splits=n_repeats,
+        test_size=test_size,
+        random_state=random_state,
+    )
+    fold_rows = []
+    selection_rows = []
+    for repeat, (_, test_group_indices) in enumerate(
+        splitter.split(unique_groups, groups=unique_groups), start=1
+    ):
+        held_out_groups = set(unique_groups[test_group_indices])
+        trained_models = {}
+        importance_by_run = []
+        test_frames = {}
+        train_frames = {}
+
+        for dataset_name, frame in dataset_frames.items():
+            test_mask = frame["group_id"].isin(held_out_groups)
+            train_frames[dataset_name] = frame.loc[~test_mask].reset_index(drop=True)
+            test_frames[dataset_name] = frame.loc[test_mask].reset_index(drop=True)
+            if train_frames[dataset_name].empty or test_frames[dataset_name].empty:
+                raise ValueError(f"{dataset_name} has an empty train or held-out split.")
+
+            train_x = train_frames[dataset_name][feature_columns].astype(float)
+            train_y = train_frames[dataset_name]["energy_winner"].astype(int)
+            if train_x.isna().any().any() or not np.isfinite(train_x.to_numpy()).all():
+                raise ValueError(f"{dataset_name} training features contain invalid values.")
+            if train_y.nunique() != 2:
+                raise ValueError(f"{dataset_name} training split must contain both target classes.")
+
+            for model_name in model_names:
+                model = model_factories[model_name]()
+                model.fit(train_x, train_y)
+                trained_models[(dataset_name, model_name)] = model
+                if model_name == "logistic_regression":
+                    importance = np.abs(model[-1].coef_).mean(axis=0)
+                else:
+                    importance = model.feature_importances_
+                importance_rank = pd.Series(importance, index=feature_columns).rank(
+                    method="average", pct=True
+                )
+                low_features = set(
+                    importance_rank[importance_rank <= bottom_percent].index
+                )
+                importance_by_run.append((dataset_name, model_name, low_features))
+                for feature in feature_columns:
+                    selection_rows.append({
+                        "repeat": repeat,
+                        "dataset": dataset_name,
+                        "model": model_name,
+                        "feature": feature,
+                        "importance": float(importance[feature_columns.index(feature)]),
+                        "rank_percentile": float(importance_rank[feature]),
+                        "bottom_percent": feature in low_features,
+                    })
+
+        low_counts = pd.Series(0, index=feature_columns, dtype=int)
+        low_datasets = {feature: set() for feature in feature_columns}
+        for dataset_name, model_name, low_features in importance_by_run:
+            for feature in low_features:
+                low_counts[feature] += 1
+                low_datasets[feature].add(dataset_name)
+        removed_features = [
+            feature for feature in feature_columns
+            if low_counts[feature] >= minimum_low_importance_fits
+            and len(low_datasets[feature]) == len(dataset_frames)
+        ]
+        for row in selection_rows:
+            if row["repeat"] == repeat:
+                row["selected_for_ablation"] = row["feature"] in removed_features
+
+        for dataset_name in dataset_frames:
+            test_frame = test_frames[dataset_name]
+            test_x = test_frame[feature_columns].astype(float)
+            truth = test_frame["energy_winner"].astype(int)
+            ablated_columns = [
+                feature for feature in feature_columns if feature not in removed_features
+            ]
+            for model_name in model_names:
+                baseline_model = trained_models[(dataset_name, model_name)]
+                baseline_prediction = baseline_model.predict(test_x).astype(int)
+                baseline_probability = baseline_model.predict_proba(test_x)[:, 1]
+                ablated_model = model_factories[model_name]()
+                train_x = train_frames[dataset_name][ablated_columns].astype(float)
+                train_y = train_frames[dataset_name]["energy_winner"].astype(int)
+                ablated_model.fit(train_x, train_y)
+                ablated_x = test_frame[ablated_columns].astype(float)
+                ablated_prediction = ablated_model.predict(ablated_x).astype(int)
+                ablated_probability = ablated_model.predict_proba(ablated_x)[:, 1]
+
+                for condition, prediction, probability in [
+                    ("all_features", baseline_prediction, baseline_probability),
+                    ("importance_ablation", ablated_prediction, ablated_probability),
+                ]:
+                    fold_rows.append({
+                        "repeat": repeat,
+                        "dataset": dataset_name,
+                        "model": model_name,
+                        "condition": condition,
+                        "removed_features": ",".join(removed_features),
+                        "n_removed_features": len(removed_features),
+                        "n_train_pairs": len(train_frames[dataset_name]),
+                        "n_test_pairs": len(test_frame),
+                        "n_test_groups": int(test_frame["group_id"].nunique()),
+                        "accuracy": accuracy_score(truth, prediction),
+                        "balanced_accuracy": balanced_accuracy_score(truth, prediction),
+                        "f1": f1_score(truth, prediction, zero_division=0),
+                        "roc_auc": (
+                            roc_auc_score(truth, probability)
+                            if truth.nunique() == 2
+                            else np.nan
+                        ),
+                    })
+
+    fold_metrics = pd.DataFrame(fold_rows)
+    summary = fold_metrics.groupby(
+        ["dataset", "model", "condition"], as_index=False
+    ).agg(
+        accuracy_mean=("accuracy", "mean"),
+        accuracy_std=("accuracy", "std"),
+        balanced_accuracy_mean=("balanced_accuracy", "mean"),
+        balanced_accuracy_std=("balanced_accuracy", "std"),
+        f1_mean=("f1", "mean"),
+        f1_std=("f1", "std"),
+        roc_auc_mean=("roc_auc", "mean"),
+        roc_auc_std=("roc_auc", "std"),
+        mean_removed_features=("n_removed_features", "mean"),
+    )
+    selection = pd.DataFrame(selection_rows)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    fold_metrics.to_csv(results_dir / "feature_ablation_folds.csv", index=False)
+    summary.to_csv(results_dir / "feature_ablation_summary.csv", index=False)
+    selection.to_csv(results_dir / "feature_ablation_selection.csv", index=False)
+    return summary, fold_metrics, selection
 
 
 def train_codebert_dataset(
@@ -350,6 +541,7 @@ def codebert_measurement_tasks(
     max_length: int = 256,
     batch_size: int = 8,
     inference_pairs: int = 256,
+    force_cpu: bool = False,
 ):
     try:
         import torch
@@ -370,7 +562,9 @@ def codebert_measurement_tasks(
     if frame.empty:
         raise ValueError(f"No non-tied code pairs available for {dataset_path}.")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cpu" if force_cpu or not torch.cuda.is_available() else "cuda"
+    )
     tokenizer = AutoTokenizer.from_pretrained(metadata["model_id"])
     encoder = AutoModel.from_pretrained(metadata["model_id"]).to(device).eval()
     all_text = pd.concat(
@@ -441,6 +635,7 @@ def codebert_measurement_tasks(
         "training": training_task,
         "inference": inference_task,
         "inference_pairs": len(inference_frame),
+        "device": device,
         "encoder": encoder,
         "tokenizer": tokenizer,
         "torch": torch,

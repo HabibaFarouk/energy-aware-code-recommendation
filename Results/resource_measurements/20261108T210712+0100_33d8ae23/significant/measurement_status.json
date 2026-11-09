@@ -1,0 +1,13 @@
+{
+  "run_id": "20261108T210712+0100_33d8ae23",
+  "dataset": "significant",
+  "runtime_and_process_resource_measurements_available": true,
+  "actual_energy_available": false,
+  "actual_energy_source": null,
+  "actual_energy_scope": null,
+  "training_repetitions_requested": 10,
+  "inference_repetitions_requested": 10,
+  "inference_passes_per_repetition": 10,
+  "measurement_datetime": "2026-11-08T21:07:14.204719+01:00",
+  "results_directory": "Results\\resource_measurements\\20261108T210712+0100_33d8ae23\\significant"
+}

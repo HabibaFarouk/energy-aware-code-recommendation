@@ -1,0 +1,23 @@
+{
+  "dataset": "significant",
+  "model_id": "microsoft/codebert-base",
+  "encoder_frozen": true,
+  "pooling": "attention-mask mean pooling",
+  "max_length": 256,
+  "classifier": "StandardScaler + class-balanced LogisticRegression",
+  "feature_layout": [
+    "embedding_v0",
+    "embedding_v1",
+    "embedding_v1_minus_v0"
+  ],
+  "n_pairs": 3000,
+  "n_problem_groups": 476,
+  "class_counts": {
+    "1": 1521,
+    "0": 1479
+  },
+  "group_column": "problem_id",
+  "group_kfold_splits": 5,
+  "embedding_seconds": 815.5164812998846,
+  "embedding_unique_code_count": 5848
+}

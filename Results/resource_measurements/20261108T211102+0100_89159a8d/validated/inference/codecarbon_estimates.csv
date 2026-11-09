@@ -1,0 +1,4 @@
+dataset,model,task,repetition,elapsed_seconds,estimated_energy_joules,measurement_source,is_estimate,tracker_configuration
+validated,logistic_regression,inference,1,1.895118699874729,1.943426178860923,CodeCarbon estimate,True,"{""project_name"": ""energy_aware_recommendation"", ""save_to_file"": false, ""model_loading_included"": false}"
+validated,random_forest,inference,1,4.304501799866557,37.88134607660451,CodeCarbon estimate,True,"{""project_name"": ""energy_aware_recommendation"", ""save_to_file"": false, ""model_loading_included"": false}"
+validated,xgboost,inference,1,1.5554661001078784,6.3910251573956645,CodeCarbon estimate,True,"{""project_name"": ""energy_aware_recommendation"", ""save_to_file"": false, ""model_loading_included"": false}"

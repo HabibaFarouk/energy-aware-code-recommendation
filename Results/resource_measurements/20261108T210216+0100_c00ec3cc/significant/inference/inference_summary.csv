@@ -1,0 +1,4 @@
+dataset,model,feature_config,repetitions,mean_runtime_seconds,std_runtime_seconds,mean_process_cpu_utilization_pct_of_total,mean_peak_process_memory_mb,std_peak_process_memory_mb,mean_memory_increase_mb,mean_actual_energy_joules,std_actual_energy_joules,mean_net_actual_energy_joules,std_net_actual_energy_joules,mean_seconds_per_prediction,mean_predictions_per_second
+significant,logistic_regression,combined,10,0.05369402985088527,0.0012392482548497028,,664.578125,0.0,0.014453125,,,,,1.789800995029509e-06,558986.609940865
+significant,random_forest,combined,10,2.003912759991363,0.027039649004933924,736.2669800327955,674.73984375,0.3982383080518968,0.769921875,,,,,6.679709199971209e-05,14973.117631208786
+significant,xgboost,combined,10,0.14916435997001826,0.00273058214580334,,662.683984375,0.5092709092371815,0.011328125,,,,,4.972145332333943e-06,201179.92595907472

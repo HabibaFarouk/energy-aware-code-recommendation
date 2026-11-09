@@ -48,7 +48,6 @@
     "import_count_delta",
     "builtin_call_count_delta"
   ],
-  "zero_variance_features_removed": [],
   "target": "energy_winner",
   "group_column": "group_id",
   "group_kfold_splits": 5,

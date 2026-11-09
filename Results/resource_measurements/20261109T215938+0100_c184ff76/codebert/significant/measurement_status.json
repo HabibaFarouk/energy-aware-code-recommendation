@@ -1,0 +1,13 @@
+{
+  "dataset": "significant",
+  "run_id": "20261109T215938+0100_c184ff76",
+  "encoder_frozen": true,
+  "training_includes_embedding_extraction": true,
+  "encoder_loading_included": false,
+  "gpu_available_to_pytorch": false,
+  "measurement_device": "cpu",
+  "gpu_monitoring_included": false,
+  "comparison_with_tabular_models": "Keep separate; encoder and GPU resource-accounting conditions differ.",
+  "energy_source": null,
+  "actual_energy_available": false
+}

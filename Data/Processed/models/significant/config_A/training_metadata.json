@@ -33,7 +33,6 @@
     "builtin_call_count_v0",
     "builtin_call_count_v1"
   ],
-  "zero_variance_features_removed": [],
   "target": "energy_winner",
   "group_column": "group_id",
   "group_kfold_splits": 5,

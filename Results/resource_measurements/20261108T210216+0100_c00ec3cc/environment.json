@@ -1,0 +1,33 @@
+{
+  "run_id": "20261108T210216+0100_c00ec3cc",
+  "measurement_datetime": "2026-11-08T21:02:17.720561+01:00",
+  "operating_system": "Windows-10-10.0.19045-SP0",
+  "system": "Windows",
+  "processor": "Intel64 Family 6 Model 141 Stepping 1, GenuineIntel",
+  "physical_cpu_cores": 8,
+  "logical_cpu_threads": 16,
+  "cpu_frequency_mhz": 2304.0,
+  "total_ram_gb": 15.737,
+  "available_ram_at_start_gb": 4.9,
+  "windows_gpu_names": [
+    "Intel(R) UHD Graphics",
+    "NVIDIA GeForce RTX 3050 Laptop GPU"
+  ],
+  "pytorch_cuda_available": false,
+  "pytorch_cuda_devices": [],
+  "python_version": "3.14.6 (tags/v3.14.6:c63aec6, Jun 10 2026, 10:26:10) [MSC v.1944 64 bit (AMD64)]",
+  "library_versions": {
+    "psutil": "7.2.2",
+    "numpy": "2.5.4",
+    "pandas": "3.1.1",
+    "scikit-learn": "1.9.1",
+    "xgboost": "3.4.1",
+    "torch": "2.15.0",
+    "transformers": "5.22.1",
+    "codecarbon": "3.3.2",
+    "pyarrow": "26.0.1"
+  },
+  "process_memory_measurement": "Python process RSS, sampled periodically with psutil; sampling can miss brief peaks.",
+  "process_cpu_measurement": "Python process CPU time normalized to total logical CPU capacity; not system CPU utilization.",
+  "sampling_interval_seconds": 0.1
+}

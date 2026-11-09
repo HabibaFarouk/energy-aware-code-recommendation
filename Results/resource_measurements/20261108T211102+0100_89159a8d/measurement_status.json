@@ -1,0 +1,8 @@
+{
+  "run_id": "20261108T211102+0100_89159a8d",
+  "measurement_source": "CodeCarbon estimate",
+  "is_estimate": true,
+  "actual_energy_available": false,
+  "repetitions_per_model_task": 1,
+  "paired_resource_run_id": "20261108T210712+0100_33d8ae23"
+}

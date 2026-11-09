@@ -1,0 +1,12 @@
+elapsed_seconds,average_process_cpu_utilization_pct_of_total,baseline_process_memory_mb,peak_process_memory_mb,memory_increase_during_task_mb,cpu_sample_count,memory_sample_count,actual_energy_joules,energy_source,energy_scope,actual_energy_measurement,dataset,model,task,repetition,n_inference_pairs,measurement_device,encoder_loading_included,training_includes_embedding_extraction,gpu_monitoring_included,idle_baseline_energy_joules,net_actual_energy_joules
+5192.479052899871,49.98671896783947,1188.89453125,1887.31640625,698.421875,2,48866,,,,False,validated,codebert_frozen_embeddings_logistic_regression,training,1,,cpu,False,True,False,,
+72.2285599000752,50.0086501219716,1046.84765625,1063.7890625,16.94140625,2,679,,,,False,validated,codebert_frozen_embeddings_logistic_regression,inference,1,256.0,cpu,False,False,False,,
+71.78080550022423,49.947689752113305,1048.19140625,1064.65625,16.46484375,2,674,,,,False,validated,codebert_frozen_embeddings_logistic_regression,inference,2,256.0,cpu,False,False,False,,
+71.72354189958423,50.01206634771965,1048.69921875,1064.76171875,16.0625,2,678,,,,False,validated,codebert_frozen_embeddings_logistic_regression,inference,3,256.0,cpu,False,False,False,,
+71.75075290026143,50.00277090867361,1049.5078125,1065.76953125,16.26171875,2,676,,,,False,validated,codebert_frozen_embeddings_logistic_regression,inference,4,256.0,cpu,False,False,False,,
+71.97298399964347,49.893097029996206,1025.71875,1065.69921875,39.98046875,2,678,,,,False,validated,codebert_frozen_embeddings_logistic_regression,inference,5,256.0,cpu,False,False,False,,
+71.64919040026143,50.057076033830214,1049.86328125,1066.54296875,16.6796875,2,673,,,,False,validated,codebert_frozen_embeddings_logistic_regression,inference,6,256.0,cpu,False,False,False,,
+71.88146629976109,49.99330581945765,1051.3046875,1067.18359375,15.87890625,2,678,,,,False,validated,codebert_frozen_embeddings_logistic_regression,inference,7,256.0,cpu,False,False,False,,
+71.6260736999102,49.99015190976567,1051.16796875,1067.34765625,16.1796875,2,675,,,,False,validated,codebert_frozen_embeddings_logistic_regression,inference,8,256.0,cpu,False,False,False,,
+71.68899249983951,49.966702686221716,1051.3359375,1067.3125,15.9765625,2,675,,,,False,validated,codebert_frozen_embeddings_logistic_regression,inference,9,256.0,cpu,False,False,False,,
+71.53315209969878,49.99775219365486,1051.34765625,1067.296875,15.94921875,2,676,,,,False,validated,codebert_frozen_embeddings_logistic_regression,inference,10,256.0,cpu,False,False,False,,
