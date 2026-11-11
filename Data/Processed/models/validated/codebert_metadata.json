@@ -20,7 +20,7 @@
   },
   "group_column": "problem_id",
   "group_kfold_splits": 5,
-  "embedding_seconds": 11473.89429199975,
+  "embedding_seconds": 11889.475917700212,
   "embedding_unique_code_count": 40776,
   "device": "cpu"
 }
