@@ -21,6 +21,7 @@ import torch
 import xgboost
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -423,11 +424,21 @@ def export_saved_group_fold_models(project_root):
 
 def initialize_resource_experiment(
     project_root,
-    training_repetitions=10,
+    training_repetitions=1,
     inference_repetitions=10,
-    inference_passes=10,
+    inference_passes=1,
+    inference_sample_pairs=100,
     sampling_interval_seconds=0.1,
 ):
+    for name, value in (
+        ("training_repetitions", training_repetitions),
+        ("inference_repetitions", inference_repetitions),
+        ("inference_passes", inference_passes),
+        ("inference_sample_pairs", inference_sample_pairs),
+    ):
+        if not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be a positive integer.")
+
     root = Path(project_root).resolve()
     processed_dir = root / "Data" / "Processed"
     results_root = root / "Results"
@@ -487,22 +498,28 @@ def initialize_resource_experiment(
         "training_repetitions": training_repetitions,
         "inference_repetitions": inference_repetitions,
         "inference_passes_per_repetition": inference_passes,
+        "inference_sample_pairs_requested": inference_sample_pairs,
         "inference_definition": (
-            "Grouped-CV held-out rows are predicted with their already-fitted fold model; "
-            "model loading is excluded from timed prediction."
+            "Up to 100 deterministic grouped-CV held-out pairs are predicted once per "
+            "repetition with their already-fitted fold models; model loading is excluded. "
+            "Per-pair measurements are linearly extrapolated to the prepared dataset size."
         ),
         "training_definition": (
-            "Fresh estimator instance and fit on the full selected prepared dataset; "
-            "inference fold models are not retrained."
+            "For each model and feature configuration, fresh estimators are fitted on all "
+            "five GroupKFold training folds and once on the full prepared dataset. "
+            "Prediction-time feature extraction is excluded because engineered features "
+            "are prepared by Notebook 03; model artifact writes are excluded."
         ),
         "preprocessing": (
-            "Feature columns and estimator pipeline come from Notebook 04 metadata; "
+            "Feature columns come from each Notebook 04 configuration's metadata; "
+            "estimator settings come from the dataset training metadata. "
             "Logistic Regression StandardScaler is included."
         ),
         "datasets": {},
     }
 
     datasets = {}
+    configuration_names = ("config_A", "config_B", "combined")
     for dataset_name, file_name in DATASET_FILES.items():
         dataset_path = processed_dir / file_name
         model_dir = processed_dir / "models" / dataset_name
@@ -511,8 +528,8 @@ def initialize_resource_experiment(
             raise FileNotFoundError(f"Prepared dataset is missing: {dataset_path}")
         if not metadata_path.is_file():
             raise FileNotFoundError(f"Run Notebook 04 first; missing {metadata_path}")
-        model_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        model_hyperparameters = model_metadata.get("model_hyperparameters")
+        dataset_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        model_hyperparameters = dataset_metadata.get("model_hyperparameters")
         if not model_hyperparameters:
             raise ValueError(
                 f"Selected model hyperparameters are missing from {metadata_path}; "
@@ -526,118 +543,197 @@ def initialize_resource_experiment(
                 "Validated and significant datasets have different model settings; "
                 "run them as separate measurement configurations."
             )
-        selected_config = model_metadata["feature_config"]
-        feature_columns = model_metadata["feature_columns"]
         frame = pd.read_parquet(dataset_path)
-        missing = sorted(set(feature_columns) - set(frame.columns))
-        if missing:
-            raise ValueError(f"{dataset_name} data lacks selected features: {missing}")
-        X = frame[feature_columns].astype(float)
-        y = frame["energy_winner"].astype(int)
-        if X.isna().any().any() or not np.isfinite(X.to_numpy()).all():
-            raise ValueError(f"{dataset_name} feature matrix has missing/non-finite values.")
-        for model_name in MODEL_NAMES:
-            model_path = model_dir / f"{model_name}.joblib"
-            if not model_path.is_file():
-                raise FileNotFoundError(f"Notebook 04 selected model is missing: {model_path}")
-
         oof_path = results_root / dataset_name / "model_oof_predictions.parquet"
         if not oof_path.is_file():
             raise FileNotFoundError(f"Notebook 04 OOF predictions are missing: {oof_path}")
-        oof = pd.read_parquet(oof_path)
-        oof = oof.loc[
-            oof["feature_config"].eq(selected_config)
-            & oof["model"].eq("logistic_regression")
-        ].copy()
-        if oof.empty:
-            raise ValueError(f"No OOF rows found for {dataset_name}/{selected_config}.")
+        all_oof = pd.read_parquet(oof_path)
         keys = ["problem_id", "submission_id_v0", "submission_id_v1"]
-        if oof.duplicated(keys).any():
-            raise ValueError(f"{dataset_name} OOF rows contain duplicate pair identifiers.")
-        fold_model_dir = model_dir / selected_config / "fold_models"
-        if not fold_model_dir.is_dir():
-            raise FileNotFoundError(
-                f"Held-out inference requires fold models from Notebook 04: "
-                f"{fold_model_dir}. Run its standalone fold-model export cell; this does not "
-                "repeat model comparison or hyperparameter tuning."
+        for config_name in configuration_names:
+            config_dir = model_dir / config_name
+            config_metadata_path = config_dir / "training_metadata.json"
+            if not config_metadata_path.is_file():
+                raise FileNotFoundError(
+                    f"Run the updated Notebook 04 training cell to create "
+                    f"{config_metadata_path}."
+                )
+            config_metadata = json.loads(
+                config_metadata_path.read_text(encoding="utf-8")
             )
-
-        fold_data = {}
-        for fold in sorted(oof["fold"].unique()):
-            fold_rows = oof.loc[oof["fold"].eq(fold), keys]
-            inference_frame = fold_rows.merge(
-                frame[keys + feature_columns],
-                on=keys,
-                how="left",
-                validate="one_to_one",
-                indicator=True,
-            )
-            if not inference_frame["_merge"].eq("both").all():
-                raise ValueError(f"Could not match {dataset_name} OOF fold {fold} to features.")
-            inference_frame = inference_frame.drop(columns="_merge")
+            feature_columns = config_metadata["feature_columns"]
+            missing = sorted(set(feature_columns) - set(frame.columns))
+            if missing:
+                raise ValueError(
+                    f"{dataset_name}/{config_name} data lacks features: {missing}"
+                )
+            X = frame[feature_columns].astype(float)
+            y = frame["energy_winner"].astype(int)
+            groups = frame["group_id"]
+            if X.isna().any().any() or not np.isfinite(X.to_numpy()).all():
+                raise ValueError(
+                    f"{dataset_name}/{config_name} features have missing/non-finite values."
+                )
             for model_name in MODEL_NAMES:
-                model_path = fold_model_dir / f"{model_name}_fold_{fold}.joblib"
-                provenance_path = fold_model_dir / f"{model_name}_fold_{fold}.json"
-                if not model_path.is_file() or not provenance_path.is_file():
+                model_path = config_dir / f"{model_name}.joblib"
+                if not model_path.is_file():
                     raise FileNotFoundError(
-                        f"Missing Notebook 04 fold model or provenance for "
-                        f"{dataset_name}/{model_name}/fold {fold}."
+                        f"Notebook 04 {dataset_name}/{config_name} model is missing: "
+                        f"{model_path}"
                     )
-                provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
-                test_groups = set(inference_frame["problem_id"].astype(str))
-                train_groups = set(provenance["train_groups"])
-                saved_validation_groups = set(provenance["validation_groups"])
-                if test_groups & train_groups:
-                    raise ValueError(
-                        f"{dataset_name} fold {fold} inference groups overlap model training groups."
-                    )
-                if test_groups != saved_validation_groups:
-                    raise ValueError(
-                        f"{dataset_name} fold {fold} OOF groups differ from model provenance."
-                    )
-            fold_data[int(fold)] = inference_frame
 
-        dataset_run = {
-            "dataset_name": dataset_name,
-            "frame": frame,
-            "X": X,
-            "y": y,
-            "feature_columns": feature_columns,
-            "feature_config": selected_config,
-            "model_dir": model_dir,
-            "fold_model_dir": fold_model_dir,
-            "fold_data": fold_data,
-            "energy_counter": energy_counter,
-            "logical_cores": logical_cores,
-            "sampling_interval_seconds": sampling_interval_seconds,
-            "inference_passes": inference_passes,
-        }
-        datasets[dataset_name] = dataset_run
-        dataset_root = run_root / dataset_name
-        (dataset_root / "training").mkdir(parents=True, exist_ok=True)
-        (dataset_root / "inference").mkdir(parents=True, exist_ok=True)
-        run_metadata["datasets"][dataset_name] = {
-            "prepared_dataset": str(dataset_path.relative_to(root)),
-            "pairs": int(len(frame)),
-            "problem_groups": int(frame["group_id"].nunique()),
-            "feature_config": selected_config,
-            "feature_columns": feature_columns,
-            "model_hyperparameters": model_hyperparameters,
-            "inference_groups_per_fold": {
-                str(fold): int(part["problem_id"].nunique())
-                for fold, part in fold_data.items()
-            },
-            "inference_pairs": int(sum(len(part) for part in fold_data.values())),
-        }
-        _write_json_new(
-            dataset_root / "experiment_metadata.json",
-            run_metadata["datasets"][dataset_name],
-        )
+            oof = all_oof.loc[
+                all_oof["feature_config"].eq(config_name)
+                & all_oof["model"].eq("logistic_regression"),
+                keys + ["fold"],
+            ].copy()
+            if oof.empty or oof.duplicated(keys).any():
+                raise ValueError(
+                    f"{dataset_name}/{config_name} OOF rows do not define unique pairs."
+                )
+            expected_pairs = set(
+                map(tuple, frame[keys].itertuples(index=False, name=None))
+            )
+            observed_pairs = set(
+                map(tuple, oof[keys].itertuples(index=False, name=None))
+            )
+            if expected_pairs != observed_pairs:
+                raise ValueError(
+                    f"{dataset_name}/{config_name} OOF rows do not cover the prepared "
+                    "dataset exactly."
+                )
+            if not oof.groupby("problem_id")["fold"].nunique().eq(1).all():
+                raise ValueError(
+                    f"{dataset_name}/{config_name} problem groups occur in multiple folds."
+                )
+
+            inference_sample = oof.sample(
+                n=min(inference_sample_pairs, len(oof)), random_state=42
+            ).reset_index(drop=True)
+            fold_model_dir = config_dir / "fold_models"
+            if not fold_model_dir.is_dir():
+                raise FileNotFoundError(
+                    f"Held-out inference requires fold models for every configuration: "
+                    f"{fold_model_dir}. Re-run the updated Notebook 04 training cells."
+                )
+            fold_data = {}
+            for fold in sorted(inference_sample["fold"].unique()):
+                fold_rows = inference_sample.loc[
+                    inference_sample["fold"].eq(fold), keys
+                ]
+                inference_frame = fold_rows.merge(
+                    frame[keys + feature_columns],
+                    on=keys,
+                    how="left",
+                    validate="one_to_one",
+                    indicator=True,
+                )
+                if not inference_frame["_merge"].eq("both").all():
+                    raise ValueError(
+                        f"Could not match {dataset_name}/{config_name} sample fold "
+                        f"{fold} to features."
+                    )
+                inference_frame = inference_frame.drop(columns="_merge")
+                for model_name in MODEL_NAMES:
+                    model_path = fold_model_dir / f"{model_name}_fold_{fold}.joblib"
+                    provenance_path = fold_model_dir / f"{model_name}_fold_{fold}.json"
+                    if not model_path.is_file() or not provenance_path.is_file():
+                        raise FileNotFoundError(
+                            f"Missing fold model or provenance for "
+                            f"{dataset_name}/{config_name}/{model_name}, fold {fold}."
+                        )
+                    provenance = json.loads(
+                        provenance_path.read_text(encoding="utf-8")
+                    )
+                    sample_groups = set(inference_frame["problem_id"].astype(str))
+                    if (
+                        sample_groups & set(provenance["train_groups"])
+                        or not sample_groups.issubset(
+                            set(provenance["validation_groups"])
+                        )
+                    ):
+                        raise ValueError(
+                            f"{dataset_name}/{config_name} sample fold {fold} is "
+                            "inconsistent with its saved group-disjoint model."
+                        )
+                fold_data[int(fold)] = inference_frame
+
+            dataset_key = f"{dataset_name}/{config_name}"
+            datasets[dataset_key] = {
+                "dataset_name": dataset_name,
+                "frame": frame,
+                "X": X,
+                "y": y,
+                "groups": groups,
+                "feature_columns": feature_columns,
+                "feature_config": config_name,
+                "model_dir": config_dir,
+                "fold_model_dir": fold_model_dir,
+                "fold_data": fold_data,
+                "n_dataset_pairs": int(len(frame)),
+                "n_inference_pairs": int(len(inference_sample)),
+                "energy_counter": energy_counter,
+                "logical_cores": logical_cores,
+                "sampling_interval_seconds": sampling_interval_seconds,
+                "inference_passes": inference_passes,
+            }
+            dataset_root = run_root / dataset_name / config_name
+            (dataset_root / "training").mkdir(parents=True, exist_ok=True)
+            (dataset_root / "inference").mkdir(parents=True, exist_ok=True)
+            run_metadata["datasets"][dataset_key] = {
+                "prepared_dataset": str(dataset_path.relative_to(root)),
+                "pairs": int(len(frame)),
+                "problem_groups": int(groups.nunique()),
+                "feature_config": config_name,
+                "feature_columns": feature_columns,
+                "model_hyperparameters": model_hyperparameters,
+                "inference_groups_per_fold": {
+                    str(fold): int(part["problem_id"].nunique())
+                    for fold, part in fold_data.items()
+                },
+                "inference_sample_pairs": int(len(inference_sample)),
+            }
+            _write_json_new(
+                dataset_root / "experiment_metadata.json",
+                run_metadata["datasets"][dataset_key],
+            )
+
+    meter_rows = []
+    for dataset in datasets.values():
+        for model_name in MODEL_NAMES:
+            for workload, repetitions in (
+                ("training", training_repetitions),
+                ("inference", inference_repetitions),
+            ):
+                for repetition in range(1, repetitions + 1):
+                    for task in (workload, "idle"):
+                        meter_rows.append(
+                            {
+                                "initial_energy_reading": None,
+                                "final_energy_reading": None,
+                                "meter_unit": None,
+                                "measurement_duration_seconds": None,
+                                "experiment_name": (
+                                    f"Traditional {dataset['dataset_name']} "
+                                    f"{dataset['feature_config']} {workload}"
+                                ),
+                                "dataset": dataset["dataset_name"],
+                                "feature_config": dataset["feature_config"],
+                                "model_name": model_name,
+                                "task": task,
+                                "repetition": repetition,
+                                "notes": (
+                                    f"Pair this {task} reading with {workload} "
+                                    f"repetition {repetition}."
+                                ),
+                            }
+                        )
+    manual_meter_template = create_manual_meter_template(run_root, meter_rows)
 
     state = {
         "root": root,
         "run_id": run_id,
         "run_root": run_root,
+        "manual_meter_template": manual_meter_template,
         "environment": environment,
         "run_metadata": run_metadata,
         "datasets": datasets,
@@ -646,6 +742,7 @@ def initialize_resource_experiment(
         "training_repetitions": training_repetitions,
         "inference_repetitions": inference_repetitions,
         "inference_passes": inference_passes,
+        "inference_sample_pairs": inference_sample_pairs,
         "logical_cores": logical_cores,
         "sampling_interval_seconds": sampling_interval_seconds,
     }
@@ -765,17 +862,21 @@ def _codebert_dataset(state, dataset_name):
         raise ValueError(f"Unknown CodeBERT dataset: {dataset_name!r}") from exc
 
 
-def _sample_codebert_workload(workload, state):
+def _sample_workload_with_codecarbon(
+    workload,
+    energy_counter,
+    logical_cores,
+    interval_seconds,
+    project_name="energy_aware_recommendation",
+):
     try:
         from codecarbon import EmissionsTracker
     except ImportError:
         tracker = None
     else:
         tracker = EmissionsTracker(
-            project_name="energy_aware_recommendation_codebert",
-            save_to_file=False,
-            save_to_logger=False,
-            save_to_api=False,
+            project_name=project_name,
+            output_methods=[],
             log_level="error",
         )
         tracker.start()
@@ -783,9 +884,9 @@ def _sample_codebert_workload(workload, state):
     try:
         measurement, result = _sample_workload(
             workload,
-            state["energy_counter"],
-            state["logical_cores"],
-            state["sampling_interval_seconds"],
+            energy_counter,
+            logical_cores,
+            interval_seconds,
         )
     finally:
         if tracker is not None:
@@ -803,6 +904,16 @@ def _sample_codebert_workload(workload, state):
         )
         measurement["codecarbon_estimate_status"] = "estimated"
     return measurement, result
+
+
+def _sample_codebert_workload(workload, state):
+    return _sample_workload_with_codecarbon(
+        workload,
+        state["energy_counter"],
+        state["logical_cores"],
+        state["sampling_interval_seconds"],
+        project_name="energy_aware_recommendation_codebert",
+    )
 
 
 def _save_codebert_run_metadata_if_complete(state):
@@ -1033,31 +1144,46 @@ def measure_codebert_inference(
 def run_training_measurements(state):
     rows = []
     idle_rows = []
-    for dataset_name, dataset in state["datasets"].items():
+    for dataset in state["datasets"].values():
         for model_name in MODEL_NAMES:
             for repetition in range(1, state["training_repetitions"] + 1):
-                def fit_fresh_model(
-                    model_name=model_name, X=dataset["X"], y=dataset["y"]
+                def train_grouped_cv_and_final_model(
+                    model_name=model_name,
+                    X=dataset["X"],
+                    y=dataset["y"],
+                    groups=dataset["groups"],
                 ):
-                    model = state["model_factories"][model_name]()
-                    model.fit(X, y)
-                    return model
+                    splitter = GroupKFold(n_splits=5)
+                    for train_indices, validation_indices in splitter.split(
+                        X, y, groups
+                    ):
+                        model = state["model_factories"][model_name]()
+                        model.fit(X.iloc[train_indices], y.iloc[train_indices])
+                        validation_X = X.iloc[validation_indices]
+                        model.predict(validation_X)
+                        if hasattr(model, "predict_proba"):
+                            model.predict_proba(validation_X)
+                    final_model = state["model_factories"][model_name]()
+                    final_model.fit(X, y)
 
-                measurement, fitted_model = _sample_workload(
-                    fit_fresh_model,
+                measurement, _ = _sample_workload_with_codecarbon(
+                    train_grouped_cv_and_final_model,
                     state["energy_counter"],
                     state["logical_cores"],
                     state["sampling_interval_seconds"],
                 )
                 measurement.update(
                     {
-                        "dataset": dataset_name,
+                        "dataset": dataset["dataset_name"],
                         "model": model_name,
                         "feature_config": dataset["feature_config"],
                         "task": "training",
                         "repetition": repetition,
                         "n_training_samples": len(dataset["X"]),
+                        "n_training_groups": int(dataset["groups"].nunique()),
                         "n_features": dataset["X"].shape[1],
+                        "group_kfold_splits": 5,
+                        "full_dataset_fit_included": True,
                     }
                 )
                 idle = _paired_idle(
@@ -1080,24 +1206,33 @@ def run_training_measurements(state):
                 )
                 rows.append(measurement)
                 idle_rows.append(idle)
-                del fitted_model
-                print(
-                    f"{dataset_name}/{model_name} training "
-                    f"{repetition}/{state['training_repetitions']}: "
-                    f"{measurement['elapsed_seconds']:.3f}s"
-                )
 
     measurements = pd.DataFrame(rows)
     idle_measurements = pd.DataFrame(idle_rows)
-    for dataset_name in state["datasets"]:
-        output = state["run_root"] / dataset_name / "training"
+    for dataset in state["datasets"].values():
+        dataset_name = dataset["dataset_name"]
+        feature_config = dataset["feature_config"]
+        output = (
+            state["run_root"]
+            / dataset_name
+            / feature_config
+            / "training"
+        )
+        selected_measurements = measurements.loc[
+            measurements["dataset"].eq(dataset_name)
+            & measurements["feature_config"].eq(feature_config)
+        ]
+        selected_idle = idle_measurements.loc[
+            idle_measurements["dataset"].eq(dataset_name)
+            & idle_measurements["feature_config"].eq(feature_config)
+        ]
         _write_csv_new(
             output / "training_repetitions.csv",
-            measurements.loc[measurements["dataset"].eq(dataset_name)],
+            selected_measurements,
         )
         _write_csv_new(
             output / "idle_baseline_repetitions.csv",
-            idle_measurements.loc[idle_measurements["dataset"].eq(dataset_name)],
+            selected_idle,
         )
     state["training_measurements"] = measurements
     state["training_idle_measurements"] = idle_measurements
@@ -1106,196 +1241,165 @@ def run_training_measurements(state):
 
 def run_inference_measurements(state):
     rows = []
-    fold_rows = []
+    sample_fold_rows = []
     idle_rows = []
-    for dataset_name, dataset in state["datasets"].items():
+    for dataset in state["datasets"].values():
+        fold_inputs = {}
+        fold_models = {}
+        for fold, inference_frame in dataset["fold_data"].items():
+            fold_inputs[fold] = inference_frame[
+                dataset["feature_columns"]
+            ].astype(float)
         for model_name in MODEL_NAMES:
+            for fold in dataset["fold_data"]:
+                model_path = (
+                    dataset["fold_model_dir"]
+                    / f"{model_name}_fold_{fold}.joblib"
+                )
+                fold_models[fold] = joblib.load(model_path)
             for repetition in range(1, state["inference_repetitions"] + 1):
-                repetition_folds = []
-                repetition_idle = []
-                for fold, inference_frame in dataset["fold_data"].items():
-                    model_path = (
-                        dataset["fold_model_dir"]
-                        / f"{model_name}_fold_{fold}.joblib"
-                    )
-                    model = joblib.load(model_path)
-                    X_test = inference_frame[dataset["feature_columns"]].astype(float)
-                    prediction_count = len(X_test) * state["inference_passes"]
+                def predict_sampled_oof():
+                    for _ in range(state["inference_passes"]):
+                        for fold, X_test in fold_inputs.items():
+                            model = fold_models[fold]
+                            if hasattr(model, "predict_proba"):
+                                model.predict_proba(X_test)
+                            else:
+                                model.predict(X_test)
 
-                    def predict_heldout(
-                        model=model,
-                        X_test=X_test,
-                        passes=state["inference_passes"],
-                    ):
-                        for _ in range(passes):
-                            model.predict(X_test)
-
-                    measurement, _ = _sample_workload(
-                        predict_heldout,
-                        state["energy_counter"],
-                        state["logical_cores"],
-                        state["sampling_interval_seconds"],
-                    )
-                    measurement.update(
-                        {
-                            "dataset": dataset_name,
-                            "model": model_name,
-                            "feature_config": dataset["feature_config"],
-                            "task": "inference",
-                            "repetition": repetition,
-                            "fold": fold,
-                            "n_unique_samples": len(X_test),
-                            "n_predictions": prediction_count,
-                            "inference_passes": state["inference_passes"],
-                            "average_inference_time_per_sample_seconds": (
-                                measurement["elapsed_seconds"] / prediction_count
-                            ),
-                            "predictions_per_second": (
-                                prediction_count / measurement["elapsed_seconds"]
-                                if measurement["elapsed_seconds"]
-                                else np.nan
-                            ),
-                        }
-                    )
-                    idle = _paired_idle(
-                        measurement["elapsed_seconds"],
-                        dataset,
-                        model_name,
-                        dataset["feature_config"],
-                        "inference",
-                        repetition,
-                        fold=fold,
-                    )
-                    measurement["idle_baseline_energy_joules"] = idle[
-                        "actual_energy_joules"
-                    ]
-                    measurement["net_actual_energy_joules"] = (
-                        measurement["actual_energy_joules"]
-                        - idle["actual_energy_joules"]
-                        if measurement["actual_energy_joules"] is not None
-                        and idle["actual_energy_joules"] is not None
-                        else None
-                    )
-                    fold_rows.append(measurement)
-                    idle_rows.append(idle)
-                    repetition_folds.append(measurement)
-                    repetition_idle.append(idle)
-                    del model
-
-                total_elapsed = sum(row["elapsed_seconds"] for row in repetition_folds)
-                total_predictions = sum(row["n_predictions"] for row in repetition_folds)
-                energies = [row["actual_energy_joules"] for row in repetition_folds]
-                idle_energies = [
-                    row["actual_energy_joules"] for row in repetition_idle
-                ]
-                actual_energy = (
-                    sum(energies)
-                    if all(value is not None for value in energies)
-                    else None
+                measurement, _ = _sample_workload_with_codecarbon(
+                    predict_sampled_oof,
+                    state["energy_counter"],
+                    state["logical_cores"],
+                    state["sampling_interval_seconds"],
                 )
-                idle_energy = (
-                    sum(idle_energies)
-                    if all(value is not None for value in idle_energies)
-                    else None
+                prediction_count = (
+                    dataset["n_inference_pairs"] * state["inference_passes"]
                 )
-                cpu_parts = [
-                    row
-                    for row in repetition_folds
-                    if np.isfinite(
-                        row["average_process_cpu_utilization_pct_of_total"]
-                    )
-                ]
-                average_cpu = (
-                    float(
-                        np.average(
-                            [
-                                row[
-                                    "average_process_cpu_utilization_pct_of_total"
-                                ]
-                                for row in cpu_parts
-                            ],
-                            weights=[row["elapsed_seconds"] for row in cpu_parts],
-                        )
-                    )
-                    if cpu_parts
-                    else np.nan
-                )
-                rows.append(
+                measurement.update(
                     {
-                        "dataset": dataset_name,
+                        "dataset": dataset["dataset_name"],
                         "model": model_name,
                         "feature_config": dataset["feature_config"],
                         "task": "inference",
                         "repetition": repetition,
-                        "n_unique_samples": sum(
-                            row["n_unique_samples"] for row in repetition_folds
-                        ),
-                        "n_predictions": total_predictions,
+                        "n_unique_samples": dataset["n_inference_pairs"],
+                        "n_predictions": prediction_count,
                         "inference_passes": state["inference_passes"],
-                        "elapsed_seconds": total_elapsed,
+                        "dataset_pairs_for_extrapolation": dataset["n_dataset_pairs"],
+                        "inference_extrapolation_factor": (
+                            dataset["n_dataset_pairs"] / dataset["n_inference_pairs"]
+                        ),
                         "average_inference_time_per_sample_seconds": (
-                            total_elapsed / total_predictions
+                            measurement["elapsed_seconds"] / prediction_count
                         ),
                         "predictions_per_second": (
-                            total_predictions / total_elapsed
-                            if total_elapsed
+                            prediction_count / measurement["elapsed_seconds"]
+                            if measurement["elapsed_seconds"]
                             else np.nan
-                        ),
-                        "average_process_cpu_utilization_pct_of_total": average_cpu,
-                        "baseline_process_memory_mb": max(
-                            row["baseline_process_memory_mb"]
-                            for row in repetition_folds
-                        ),
-                        "peak_process_memory_mb": max(
-                            row["peak_process_memory_mb"]
-                            for row in repetition_folds
-                        ),
-                        "memory_increase_during_task_mb": max(
-                            row["memory_increase_during_task_mb"]
-                            for row in repetition_folds
-                        ),
-                        "cpu_sample_count": sum(
-                            row["cpu_sample_count"] for row in repetition_folds
-                        ),
-                        "memory_sample_count": sum(
-                            row["memory_sample_count"] for row in repetition_folds
-                        ),
-                        "actual_energy_joules": actual_energy,
-                        "idle_baseline_energy_joules": idle_energy,
-                        "net_actual_energy_joules": (
-                            actual_energy - idle_energy
-                            if actual_energy is not None and idle_energy is not None
-                            else None
-                        ),
-                        "energy_source": state["energy_counter"].backend,
-                        "energy_scope": state["energy_counter"].scope,
-                        "actual_energy_measurement": (
-                            state["energy_counter"].backend is not None
                         ),
                     }
                 )
-                print(
-                    f"{dataset_name}/{model_name} inference "
-                    f"{repetition}/{state['inference_repetitions']}: "
-                    f"{total_elapsed:.3f}s for {total_predictions:,} predictions"
+                idle = _paired_idle(
+                    measurement["elapsed_seconds"],
+                    dataset,
+                    model_name,
+                    dataset["feature_config"],
+                    "inference",
+                    repetition,
                 )
+                measurement["idle_baseline_energy_joules"] = idle[
+                    "actual_energy_joules"
+                ]
+                measurement["net_actual_energy_joules"] = (
+                    measurement["actual_energy_joules"]
+                    - idle["actual_energy_joules"]
+                    if measurement["actual_energy_joules"] is not None
+                    and idle["actual_energy_joules"] is not None
+                    else None
+                )
+                measured_energy = measurement["actual_energy_joules"]
+                net_energy = measurement["net_actual_energy_joules"]
+                estimated_energy = measurement["codecarbon_estimated_energy_joules"]
+                measurement["gross_actual_energy_joules_per_pair"] = (
+                    measured_energy / prediction_count
+                    if measured_energy is not None
+                    else None
+                )
+                measurement["net_actual_energy_joules_per_pair"] = (
+                    net_energy / prediction_count if net_energy is not None else None
+                )
+                measurement["extrapolated_gross_actual_energy_joules"] = (
+                    measurement["gross_actual_energy_joules_per_pair"]
+                    * dataset["n_dataset_pairs"]
+                    if measured_energy is not None
+                    else None
+                )
+                measurement["extrapolated_net_actual_energy_joules"] = (
+                    measurement["net_actual_energy_joules_per_pair"]
+                    * dataset["n_dataset_pairs"]
+                    if net_energy is not None
+                    else None
+                )
+                measurement["codecarbon_estimated_energy_joules_per_pair"] = (
+                    estimated_energy / prediction_count
+                    if estimated_energy is not None
+                    else None
+                )
+                measurement["extrapolated_codecarbon_estimated_energy_joules"] = (
+                    measurement["codecarbon_estimated_energy_joules_per_pair"]
+                    * dataset["n_dataset_pairs"]
+                    if estimated_energy is not None
+                    else None
+                )
+                rows.append(measurement)
+                idle_rows.append(idle)
+                for fold, inference_frame in dataset["fold_data"].items():
+                    sample_fold_rows.append(
+                        {
+                            "dataset": dataset["dataset_name"],
+                            "feature_config": dataset["feature_config"],
+                            "fold": fold,
+                            "n_unique_samples": len(inference_frame),
+                        }
+                    )
+            fold_models.clear()
 
     measurements = pd.DataFrame(rows)
-    fold_measurements = pd.DataFrame(fold_rows)
+    fold_measurements = pd.DataFrame(sample_fold_rows).drop_duplicates()
     idle_measurements = pd.DataFrame(idle_rows)
-    for dataset_name in state["datasets"]:
-        output = state["run_root"] / dataset_name / "inference"
+    for dataset in state["datasets"].values():
+        dataset_name = dataset["dataset_name"]
+        feature_config = dataset["feature_config"]
+        output = (
+            state["run_root"]
+            / dataset_name
+            / feature_config
+            / "inference"
+        )
+        selected_measurements = measurements.loc[
+            measurements["dataset"].eq(dataset_name)
+            & measurements["feature_config"].eq(feature_config)
+        ]
+        selected_folds = fold_measurements.loc[
+            fold_measurements["dataset"].eq(dataset_name)
+            & fold_measurements["feature_config"].eq(feature_config)
+        ]
+        selected_idle = idle_measurements.loc[
+            idle_measurements["dataset"].eq(dataset_name)
+            & idle_measurements["feature_config"].eq(feature_config)
+        ]
         _write_csv_new(
             output / "inference_repetitions.csv",
-            measurements.loc[measurements["dataset"].eq(dataset_name)],
+            selected_measurements,
         )
         _write_csv_new(
-            output / "inference_by_fold.csv",
-            fold_measurements.loc[fold_measurements["dataset"].eq(dataset_name)],
+            output / "inference_sample_by_fold.csv",
+            selected_folds,
         )
         _write_csv_new(
             output / "idle_baseline_repetitions.csv",
-            idle_measurements.loc[idle_measurements["dataset"].eq(dataset_name)],
+            selected_idle,
         )
     state["inference_measurements"] = measurements
     state["inference_fold_measurements"] = fold_measurements
@@ -1322,6 +1426,8 @@ def create_manual_meter_template(run_root, template_rows=None):
     ]
     if template_rows and any("dataset" in row for row in template_rows):
         columns.insert(columns.index("model_name"), "dataset")
+    if template_rows and any("feature_config" in row for row in template_rows):
+        columns.insert(columns.index("model_name"), "feature_config")
     _write_csv_new(path, pd.DataFrame(template_rows, columns=columns))
     return path
 
@@ -1417,15 +1523,48 @@ def summarize_resources(frame, task):
         "std_actual_energy_joules": ("actual_energy_joules", "std"),
         "mean_net_actual_energy_joules": ("net_actual_energy_joules", "mean"),
         "std_net_actual_energy_joules": ("net_actual_energy_joules", "std"),
+        "mean_codecarbon_estimated_energy_joules": (
+            "codecarbon_estimated_energy_joules",
+            "mean",
+        ),
     }
     if task == "inference":
         aggregations.update(
             {
+                "mean_inference_sample_pairs": ("n_unique_samples", "mean"),
+                "mean_dataset_extrapolation_factor": (
+                    "inference_extrapolation_factor",
+                    "mean",
+                ),
                 "mean_seconds_per_prediction": (
                     "average_inference_time_per_sample_seconds",
                     "mean",
                 ),
                 "mean_predictions_per_second": ("predictions_per_second", "mean"),
+                "mean_gross_actual_energy_joules_per_pair": (
+                    "gross_actual_energy_joules_per_pair",
+                    "mean",
+                ),
+                "mean_net_actual_energy_joules_per_pair": (
+                    "net_actual_energy_joules_per_pair",
+                    "mean",
+                ),
+                "mean_extrapolated_gross_actual_energy_joules": (
+                    "extrapolated_gross_actual_energy_joules",
+                    "mean",
+                ),
+                "mean_extrapolated_net_actual_energy_joules": (
+                    "extrapolated_net_actual_energy_joules",
+                    "mean",
+                ),
+                "mean_codecarbon_estimated_energy_joules_per_pair": (
+                    "codecarbon_estimated_energy_joules_per_pair",
+                    "mean",
+                ),
+                "mean_extrapolated_codecarbon_estimated_energy_joules": (
+                    "extrapolated_codecarbon_estimated_energy_joules",
+                    "mean",
+                ),
             }
         )
     return selected.groupby(
@@ -1436,19 +1575,30 @@ def summarize_resources(frame, task):
 def save_resource_summaries(state):
     training = summarize_resources(state["training_measurements"], "training")
     inference = summarize_resources(state["inference_measurements"], "inference")
-    for dataset_name in state["datasets"]:
-        root = state["run_root"] / dataset_name
+    for dataset in state["datasets"].values():
+        dataset_name = dataset["dataset_name"]
+        feature_config = dataset["feature_config"]
+        root = state["run_root"] / dataset_name / feature_config
+        training_rows = training.loc[
+            training["dataset"].eq(dataset_name)
+            & training["feature_config"].eq(feature_config)
+        ]
+        inference_rows = inference.loc[
+            inference["dataset"].eq(dataset_name)
+            & inference["feature_config"].eq(feature_config)
+        ]
         _write_csv_new(
             root / "training" / "training_summary.csv",
-            training.loc[training["dataset"].eq(dataset_name)],
+            training_rows,
         )
         _write_csv_new(
             root / "inference" / "inference_summary.csv",
-            inference.loc[inference["dataset"].eq(dataset_name)],
+            inference_rows,
         )
         status = {
             "run_id": state["run_id"],
             "dataset": dataset_name,
+            "feature_config": feature_config,
             "runtime_and_process_resource_measurements_available": True,
             "actual_energy_available": state["energy_counter"].backend is not None,
             "actual_energy_source": state["energy_counter"].backend,
@@ -1473,7 +1623,7 @@ def run_codecarbon_estimates(state, repetitions=1):
         ) from exc
 
     rows = []
-    for dataset_name, dataset in state["datasets"].items():
+    for dataset in state["datasets"].values():
         for model_name in MODEL_NAMES:
             estimator_by_fold = {
                 fold: joblib.load(
@@ -1487,21 +1637,39 @@ def run_codecarbon_estimates(state, repetitions=1):
                 for fold, part in run["fold_data"].items():
                     features = part[run["feature_columns"]].astype(float)
                     for _ in range(state["inference_passes"]):
-                        estimators[fold].predict(features)
+                        model = estimators[fold]
+                        if hasattr(model, "predict_proba"):
+                            model.predict_proba(features)
+                        else:
+                            model.predict(features)
+
+            def train_grouped_cv_and_final_model(
+                model_name=model_name,
+                X=dataset["X"],
+                y=dataset["y"],
+                groups=dataset["groups"],
+            ):
+                for train_indices, validation_indices in GroupKFold(
+                    n_splits=5
+                ).split(X, y, groups):
+                    model = state["model_factories"][model_name]()
+                    model.fit(X.iloc[train_indices], y.iloc[train_indices])
+                    validation_X = X.iloc[validation_indices]
+                    model.predict(validation_X)
+                    if hasattr(model, "predict_proba"):
+                        model.predict_proba(validation_X)
+                final_model = state["model_factories"][model_name]()
+                final_model.fit(X, y)
 
             workloads = {
-                "training": lambda model_name=model_name, X=dataset["X"], y=dataset["y"]: (
-                    state["model_factories"][model_name]().fit(X, y)
-                ),
+                "training": train_grouped_cv_and_final_model,
                 "inference": infer_with_saved_folds,
             }
             for task_name, workload in workloads.items():
                 for repetition in range(1, repetitions + 1):
                     tracker = EmissionsTracker(
                         project_name="energy_aware_recommendation",
-                        save_to_file=False,
-                        save_to_logger=False,
-                        save_to_api=False,
+                        output_methods=[],
                         log_level="error",
                     )
                     started = time.perf_counter()
@@ -1514,8 +1682,9 @@ def run_codecarbon_estimates(state, repetitions=1):
                     energy_kwh = tracker.final_emissions_data.energy_consumed
                     rows.append(
                         {
-                            "dataset": dataset_name,
+                            "dataset": dataset["dataset_name"],
                             "model": model_name,
+                            "feature_config": dataset["feature_config"],
                             "task": task_name,
                             "repetition": repetition,
                             "elapsed_seconds": elapsed,
@@ -1525,7 +1694,7 @@ def run_codecarbon_estimates(state, repetitions=1):
                             "tracker_configuration": json.dumps(
                                 {
                                     "project_name": "energy_aware_recommendation",
-                                    "save_to_file": False,
+                                    "output_methods": [],
                                     "model_loading_included": False,
                                 }
                             ),
@@ -1533,15 +1702,19 @@ def run_codecarbon_estimates(state, repetitions=1):
                     )
             del estimator_by_fold
     estimates = pd.DataFrame(rows)
-    for dataset_name in state["datasets"]:
+    for dataset in state["datasets"].values():
+        dataset_name = dataset["dataset_name"]
+        feature_config = dataset["feature_config"]
         for task_name in ("training", "inference"):
             _write_csv_new(
                 state["run_root"]
                 / dataset_name
+                / feature_config
                 / task_name
                 / "codecarbon_estimates.csv",
                 estimates.loc[
                     estimates["dataset"].eq(dataset_name)
+                    & estimates["feature_config"].eq(feature_config)
                     & estimates["task"].eq(task_name)
                 ],
             )

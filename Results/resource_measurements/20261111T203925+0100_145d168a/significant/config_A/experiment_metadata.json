@@ -1,0 +1,68 @@
+{
+  "prepared_dataset": "Data\\Processed\\prepared_significant_training_dataset.parquet",
+  "pairs": 3000,
+  "problem_groups": 476,
+  "feature_config": "config_A",
+  "feature_columns": [
+    "loc_v0",
+    "loc_v1",
+    "token_count_v0",
+    "token_count_v1",
+    "ast_node_count_v0",
+    "ast_node_count_v1",
+    "cyclomatic_complexity_v0",
+    "cyclomatic_complexity_v1",
+    "loop_count_v0",
+    "loop_count_v1",
+    "nested_loop_depth_v0",
+    "nested_loop_depth_v1",
+    "conditional_count_v0",
+    "conditional_count_v1",
+    "function_count_v0",
+    "function_count_v1",
+    "max_nesting_depth_v0",
+    "max_nesting_depth_v1",
+    "function_call_count_v0",
+    "function_call_count_v1",
+    "comprehension_count_v0",
+    "comprehension_count_v1",
+    "sort_call_count_v0",
+    "sort_call_count_v1",
+    "recursion_detected_v0",
+    "recursion_detected_v1",
+    "import_count_v0",
+    "import_count_v1",
+    "builtin_call_count_v0",
+    "builtin_call_count_v1"
+  ],
+  "model_hyperparameters": {
+    "logistic_regression": {
+      "scaler": "StandardScaler",
+      "max_iter": 2000,
+      "random_state": 42
+    },
+    "random_forest": {
+      "n_estimators": 200,
+      "max_depth": 12,
+      "random_state": 42,
+      "n_jobs": -1,
+      "class_weight": "balanced_subsample"
+    },
+    "xgboost": {
+      "n_estimators": 150,
+      "max_depth": 6,
+      "learning_rate": 0.1,
+      "random_state": 42,
+      "n_jobs": 4,
+      "eval_metric": "logloss"
+    }
+  },
+  "inference_groups_per_fold": {
+    "1": 15,
+    "2": 13,
+    "3": 12,
+    "4": 9,
+    "5": 11
+  },
+  "inference_sample_pairs": 100
+}

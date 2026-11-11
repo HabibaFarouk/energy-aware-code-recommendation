@@ -1,0 +1,4 @@
+dataset,model,feature_config,task,paired_task,repetition,elapsed_seconds,average_process_cpu_utilization_pct_of_total,baseline_process_memory_mb,peak_process_memory_mb,memory_increase_during_task_mb,cpu_sample_count,memory_sample_count,actual_energy_joules,energy_source,energy_scope,actual_energy_measurement
+validated,logistic_regression,combined,idle_baseline,training,1,0.890153800137341,0.0,829.35546875,829.37890625,0.0234375,2,10,,,,False
+validated,random_forest,combined,idle_baseline,training,1,5.605636799708009,0.0,821.3359375,821.359375,0.0234375,2,54,,,,False
+validated,xgboost,combined,idle_baseline,training,1,1.800915400031954,0.0,829.29296875,829.3203125,0.02734375,2,19,,,,False

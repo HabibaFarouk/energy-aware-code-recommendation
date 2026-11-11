@@ -81,7 +81,7 @@ def train_tabular_configurations(
                 train_features = features.iloc[train_idx]
                 model = factory()
                 model.fit(train_features, target.iloc[train_idx])
-                if save_fold_models and config_name == selected_feature_config:
+                if save_fold_models:
                     fold_model_dir = config_model_dir / "fold_models"
                     fold_model_dir.mkdir(parents=True, exist_ok=True)
                     joblib.dump(

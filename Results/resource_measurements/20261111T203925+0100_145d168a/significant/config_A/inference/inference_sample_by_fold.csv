@@ -1,0 +1,6 @@
+dataset,feature_config,fold,n_unique_samples
+significant,config_A,1,24
+significant,config_A,2,19
+significant,config_A,3,20
+significant,config_A,4,15
+significant,config_A,5,22
