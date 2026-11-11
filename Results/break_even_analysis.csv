@@ -1,5 +1,27 @@
-model,training_energy_j_per_fit,inference_energy_j_per_measured_batch,inference_pairs_per_batch,inference_energy_j_per_pair,mean_saving_vs_always_v0_j_per_pair_over_50_j,net_saving_j_per_pair_after_inference,break_even_recommendations,status
-logistic_regression,,,,,993.6481797168449,,,Unavailable: no actual hardware energy measurements for both training and inference.
-majority_baseline,,,,,626.2702802658191,,,Unavailable: no actual hardware energy measurements for both training and inference.
-random_forest,,,,,1013.3744986997976,,,Unavailable: no actual hardware energy measurements for both training and inference.
-xgboost,,,,,999.7517740537415,,,Unavailable: no actual hardware energy measurements for both training and inference.
+dataset,model_family,model,feature_config,energy_source,training_energy_j_per_full_fit,inference_energy_j_per_sampled_batch,inference_predictions_per_batch,inference_energy_j_per_pair,mean_saving_vs_always_v0_j_per_pair_over_50_j,net_saving_j_per_pair_after_inference,break_even_recommendations,status
+validated,codebert,codebert_frozen_embeddings_logistic_regression,codebert_embeddings,unavailable,,,100.0,,1033.8847616295868,,,Unavailable: actual energy for both training and inference is required.
+validated,traditional,logistic_regression,combined,unavailable,,,,,993.6481797168449,,,Unavailable: actual energy for both training and inference is required.
+validated,traditional,logistic_regression,config_A,unavailable,,,,,986.8923114706732,,,Unavailable: actual energy for both training and inference is required.
+validated,traditional,logistic_regression,config_B,unavailable,,,214100.0,,988.326827506501,,,Unavailable: actual energy for both training and inference is required.
+validated,traditional,majority_baseline,combined,unavailable,,,,,626.2702802658191,,,Unavailable: actual energy for both training and inference is required.
+validated,traditional,majority_baseline,config_A,unavailable,,,,,626.2702802658191,,,Unavailable: actual energy for both training and inference is required.
+validated,traditional,majority_baseline,config_B,unavailable,,,,,626.2702802658191,,,Unavailable: actual energy for both training and inference is required.
+validated,traditional,random_forest,combined,unavailable,,,,,1013.3744986997976,,,Unavailable: actual energy for both training and inference is required.
+validated,traditional,random_forest,config_A,unavailable,,,,,963.2025946258306,,,Unavailable: actual energy for both training and inference is required.
+validated,traditional,random_forest,config_B,unavailable,,,214100.0,,969.2796937301358,,,Unavailable: actual energy for both training and inference is required.
+validated,traditional,xgboost,combined,unavailable,,,,,999.7517740537415,,,Unavailable: actual energy for both training and inference is required.
+validated,traditional,xgboost,config_A,unavailable,,,,,952.2074862756429,,,Unavailable: actual energy for both training and inference is required.
+validated,traditional,xgboost,config_B,unavailable,,,214100.0,,958.7445622652411,,,Unavailable: actual energy for both training and inference is required.
+significant,codebert,codebert_frozen_embeddings_logistic_regression,codebert_embeddings,unavailable,,,100.0,,1148.75612,,,Unavailable: actual energy for both training and inference is required.
+significant,traditional,logistic_regression,combined,unavailable,,,30000.0,,1127.3203133333334,,,Unavailable: actual energy for both training and inference is required.
+significant,traditional,logistic_regression,config_A,unavailable,,,,,1126.46179,,,Unavailable: actual energy for both training and inference is required.
+significant,traditional,logistic_regression,config_B,unavailable,,,,,1136.1962333333333,,,Unavailable: actual energy for both training and inference is required.
+significant,traditional,majority_baseline,combined,unavailable,,,,,725.90712,,,Unavailable: actual energy for both training and inference is required.
+significant,traditional,majority_baseline,config_A,unavailable,,,,,725.90712,,,Unavailable: actual energy for both training and inference is required.
+significant,traditional,majority_baseline,config_B,unavailable,,,,,725.90712,,,Unavailable: actual energy for both training and inference is required.
+significant,traditional,random_forest,combined,unavailable,,,30000.0,,1094.5246633333334,,,Unavailable: actual energy for both training and inference is required.
+significant,traditional,random_forest,config_A,unavailable,,,,,1065.49417,,,Unavailable: actual energy for both training and inference is required.
+significant,traditional,random_forest,config_B,unavailable,,,,,1087.60508,,,Unavailable: actual energy for both training and inference is required.
+significant,traditional,xgboost,combined,unavailable,,,30000.0,,1061.23878,,,Unavailable: actual energy for both training and inference is required.
+significant,traditional,xgboost,config_A,unavailable,,,,,1086.9488233333332,,,Unavailable: actual energy for both training and inference is required.
+significant,traditional,xgboost,config_B,unavailable,,,,,1089.2082166666667,,,Unavailable: actual energy for both training and inference is required.
