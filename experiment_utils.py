@@ -12,6 +12,28 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 
+def _validate_codebert_max_length(max_length, tokenizer, encoder):
+    if not isinstance(max_length, int) or not 1 <= max_length <= 512:
+        raise ValueError("Standard CodeBERT input length must be between 1 and 512 tokens.")
+
+    max_positions = getattr(encoder.config, "max_position_embeddings", None)
+    padding_idx = getattr(encoder.config, "pad_token_id", 0) or 0
+    if max_positions is not None:
+        model_limit = max_positions - padding_idx - 1
+        if max_length > model_limit:
+            raise ValueError(
+                f"CodeBERT supports at most {model_limit} input tokens, not {max_length}."
+            )
+
+    tokenizer_limit = getattr(tokenizer, "model_max_length", None)
+    if isinstance(tokenizer_limit, int) and tokenizer_limit < 1_000_000:
+        if max_length > tokenizer_limit:
+            raise ValueError(
+                f"The tokenizer supports at most {tokenizer_limit} input tokens, "
+                f"not {max_length}."
+            )
+
+
 def train_tabular_configurations(
     dataset_name,
     frame,
@@ -352,8 +374,9 @@ def train_codebert_dataset(
     results_dir: Path,
     model_dir: Path,
     model_id: str = "microsoft/codebert-base",
-    max_length: int = 256,
+    max_length: int = 512,
     batch_size: int = 8,
+    force_cpu: bool = False,
 ):
     try:
         import torch
@@ -362,6 +385,9 @@ def train_codebert_dataset(
         raise ImportError(
             "The CodeBERT experiments require torch and transformers in this Python environment."
         ) from exc
+
+    if not isinstance(max_length, int) or not 1 <= max_length <= 512:
+        raise ValueError("Standard CodeBERT input length must be between 1 and 512 tokens.")
 
     required = [
         "problem_id",
@@ -376,13 +402,32 @@ def train_codebert_dataset(
     missing = sorted(set(required) - set(frame.columns))
     if missing:
         raise ValueError(f"{dataset_name} data is missing columns: {missing}")
-    frame = frame.dropna(subset=required).copy().reset_index(drop=True)
+    if "energy_winner" in frame.columns:
+        frame = frame.dropna(subset=[*required, "energy_winner"]).copy()
+    else:
+        frame = frame.dropna(subset=required).copy()
     code_columns = ["code_v0_no_empty_lines", "code_v1_no_empty_lines"]
     for column in code_columns:
         frame[column] = frame[column].astype(str)
         frame = frame.loc[frame[column].str.strip().ne("")]
-    frame = frame.loc[frame["result_energy_v0"].ne(frame["result_energy_v1"])].reset_index(drop=True)
-    frame["energy_winner"] = (frame["result_energy_v1"] < frame["result_energy_v0"]).astype("int8")
+    frame = frame.loc[
+        frame["result_energy_v0"].ne(frame["result_energy_v1"])
+    ].copy().reset_index(drop=True)
+    calculated_target = (
+        frame["result_energy_v1"] < frame["result_energy_v0"]
+    ).astype("int8")
+    if "energy_winner" in frame and not frame["energy_winner"].astype(int).equals(
+        calculated_target.astype(int)
+    ):
+        raise ValueError(f"{dataset_name} saved energy_winner labels are inconsistent.")
+    frame["energy_winner"] = calculated_target
+    pair_keys = ["problem_id", "submission_id_v0", "submission_id_v1"]
+    if frame.duplicated(pair_keys).any():
+        raise ValueError(f"{dataset_name} contains duplicate prepared code pairs.")
+    if "group_id" in frame and not frame["group_id"].astype(str).equals(
+        frame["problem_id"].astype(str)
+    ):
+        raise ValueError(f"{dataset_name} group_id does not match problem_id.")
     if frame["problem_id"].nunique() < 5 or frame["energy_winner"].nunique() != 2:
         raise ValueError(f"{dataset_name} requires at least five problems and both target classes.")
 
@@ -400,9 +445,12 @@ def train_codebert_dataset(
         count=len(frame),
     )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cpu" if force_cpu or not torch.cuda.is_available() else "cuda"
+    )
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     encoder = AutoModel.from_pretrained(model_id).to(device)
+    _validate_codebert_max_length(max_length, tokenizer, encoder)
     encoder.eval()
     started = time.perf_counter()
     embeddings = np.empty((len(unique_code), encoder.config.hidden_size), dtype=np.float32)
@@ -438,11 +486,31 @@ def train_codebert_dataset(
 
     fold_rows = []
     oof_rows = []
+    model_dir.mkdir(parents=True, exist_ok=True)
+    fold_model_dir = model_dir / "fold_models"
+    fold_model_dir.mkdir(parents=True, exist_ok=True)
     for fold, (train_idx, valid_idx) in enumerate(
         GroupKFold(n_splits=5).split(features, target, groups), start=1
     ):
         head = make_head()
         head.fit(features[train_idx], target[train_idx])
+        train_groups = sorted(pd.Series(groups[train_idx]).astype(str).unique().tolist())
+        validation_groups = sorted(pd.Series(groups[valid_idx]).astype(str).unique().tolist())
+        joblib.dump(head, fold_model_dir / f"codebert_head_fold_{fold}.joblib")
+        (fold_model_dir / f"codebert_head_fold_{fold}.json").write_text(
+            json.dumps(
+                {
+                    "dataset": dataset_name,
+                    "fold": fold,
+                    "group_column": "problem_id",
+                    "train_groups": train_groups,
+                    "validation_groups": validation_groups,
+                    "max_length": max_length,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         truth = target[valid_idx]
         prediction = head.predict(features[valid_idx]).astype(int)
         probability = head.predict_proba(features[valid_idx])[:, 1]
@@ -451,6 +519,7 @@ def train_codebert_dataset(
                 "model": "codebert_frozen_embeddings_logistic_regression",
                 "feature_config": "codebert_embeddings",
                 "fold": fold,
+                "accuracy": accuracy_score(truth, prediction),
                 "roc_auc": roc_auc_score(truth, probability) if np.unique(truth).size == 2 else np.nan,
                 "balanced_accuracy": balanced_accuracy_score(truth, prediction),
                 "f1": f1_score(truth, prediction, zero_division=0),
@@ -487,6 +556,8 @@ def train_codebert_dataset(
             {
                 "model": "codebert_frozen_embeddings_logistic_regression",
                 "feature_config": "codebert_embeddings",
+                "accuracy_mean": fold_metrics["accuracy"].mean(),
+                "accuracy_std": fold_metrics["accuracy"].std(),
                 "roc_auc_mean": fold_metrics["roc_auc"].mean(),
                 "roc_auc_std": fold_metrics["roc_auc"].std(),
                 "balanced_accuracy_mean": fold_metrics["balanced_accuracy"].mean(),
@@ -512,6 +583,8 @@ def train_codebert_dataset(
         "encoder_frozen": True,
         "pooling": "attention-mask mean pooling",
         "max_length": max_length,
+        "special_tokens_added_by_tokenizer": True,
+        "positional_embedding_limit": 512,
         "classifier": "StandardScaler + class-balanced LogisticRegression",
         "feature_layout": ["embedding_v0", "embedding_v1", "embedding_v1_minus_v0"],
         "n_pairs": int(len(frame)),
@@ -523,6 +596,7 @@ def train_codebert_dataset(
         "group_kfold_splits": 5,
         "embedding_seconds": embedding_seconds,
         "embedding_unique_code_count": int(len(unique_code)),
+        "device": str(device),
     }
     (model_dir / "codebert_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     print(
@@ -538,9 +612,10 @@ def train_codebert_dataset(
 def codebert_measurement_tasks(
     dataset_path: Path,
     model_dir: Path,
-    max_length: int = 256,
+    results_dir: Path,
+    max_length: int | None = None,
     batch_size: int = 8,
-    inference_pairs: int = 256,
+    inference_pairs: int = 100,
     force_cpu: bool = False,
 ):
     try:
@@ -551,39 +626,137 @@ def codebert_measurement_tasks(
             "The CodeBERT measurements require torch and transformers in this Python environment."
         ) from exc
 
+    if not isinstance(inference_pairs, int) or inference_pairs < 1:
+        raise ValueError("inference_pairs must be a positive integer.")
+
     metadata = json.loads((model_dir / "codebert_metadata.json").read_text(encoding="utf-8"))
-    head = joblib.load(model_dir / "codebert_head.joblib")
+    trained_max_length = int(metadata["max_length"])
+    if max_length is not None and max_length != trained_max_length:
+        raise ValueError(
+            "CodeBERT measurement input length must match the trained model metadata."
+        )
+    max_length = trained_max_length
     frame = pd.read_parquet(dataset_path)
+    required = [
+        "problem_id",
+        "submission_id_v0",
+        "submission_id_v1",
+        "code_v0_no_empty_lines",
+        "code_v1_no_empty_lines",
+        "result_energy_v0",
+        "result_energy_v1",
+    ]
+    missing = sorted(set(required) - set(frame.columns))
+    if missing:
+        raise ValueError(f"CodeBERT measurement data is missing columns: {missing}")
     frame = frame.loc[
         frame["result_energy_v0"].ne(frame["result_energy_v1"])
         & frame["code_v0_no_empty_lines"].notna()
         & frame["code_v1_no_empty_lines"].notna()
     ].reset_index(drop=True)
+    for column in ("code_v0_no_empty_lines", "code_v1_no_empty_lines"):
+        frame[column] = frame[column].astype(str)
+        frame = frame.loc[frame[column].str.strip().ne("")].reset_index(drop=True)
     if frame.empty:
         raise ValueError(f"No non-tied code pairs available for {dataset_path}.")
+    pair_keys = ["problem_id", "submission_id_v0", "submission_id_v1"]
+    if frame.duplicated(pair_keys).any():
+        raise ValueError("CodeBERT measurement data contains duplicate prepared pairs.")
+    if "group_id" in frame and not frame["group_id"].astype(str).equals(
+        frame["problem_id"].astype(str)
+    ):
+        raise ValueError("CodeBERT measurement group_id does not match problem_id.")
 
     device = torch.device(
         "cpu" if force_cpu or not torch.cuda.is_available() else "cuda"
     )
     tokenizer = AutoTokenizer.from_pretrained(metadata["model_id"])
     encoder = AutoModel.from_pretrained(metadata["model_id"]).to(device).eval()
+    _validate_codebert_max_length(max_length, tokenizer, encoder)
+    fold_model_dir = model_dir / "fold_models"
+    oof_path = Path(results_dir) / "codebert_oof_predictions.parquet"
+    if not oof_path.is_file():
+        raise FileNotFoundError(f"CodeBERT out-of-fold predictions are missing: {oof_path}")
+    oof = pd.read_parquet(oof_path)
+    if oof.empty or oof.duplicated(pair_keys).any():
+        raise ValueError("CodeBERT OOF predictions must contain unique held-out pairs.")
+    expected_pairs = set(
+        map(tuple, frame[pair_keys].itertuples(index=False, name=None))
+    )
+    observed_pairs = set(
+        map(tuple, oof[pair_keys].itertuples(index=False, name=None))
+    )
+    if expected_pairs != observed_pairs:
+        raise ValueError("CodeBERT OOF predictions do not cover the current prepared dataset.")
+    if not oof.groupby("problem_id")["fold"].nunique().eq(1).all():
+        raise ValueError("A CodeBERT problem group appears in multiple OOF folds.")
+    inference_frame = oof[pair_keys + ["fold", "y_true"]].merge(
+        frame[
+            pair_keys
+            + [
+                "code_v0_no_empty_lines",
+                "code_v1_no_empty_lines",
+                "result_energy_v0",
+                "result_energy_v1",
+            ]
+        ],
+        on=pair_keys,
+        how="left",
+        validate="one_to_one",
+        indicator=True,
+    )
+    if not inference_frame["_merge"].eq("both").all():
+        raise ValueError("Could not match CodeBERT OOF pairs to their prepared source code.")
+    expected_target = (
+        inference_frame["result_energy_v1"] < inference_frame["result_energy_v0"]
+    ).astype(int)
+    if not inference_frame["y_true"].astype(int).equals(expected_target):
+        raise ValueError("CodeBERT OOF labels do not match current prepared energy values.")
+    inference_frame = inference_frame.sample(
+        n=min(inference_pairs, len(inference_frame)), random_state=42
+    ).drop(columns="_merge").reset_index(drop=True)
+    heads_by_fold = {}
+    for fold in sorted(inference_frame["fold"].unique()):
+        model_path = fold_model_dir / f"codebert_head_fold_{int(fold)}.joblib"
+        provenance_path = fold_model_dir / f"codebert_head_fold_{int(fold)}.json"
+        if not model_path.is_file() or not provenance_path.is_file():
+            raise FileNotFoundError(
+                f"Missing CodeBERT fold model or provenance for fold {int(fold)}."
+            )
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        fold_groups = set(
+            inference_frame.loc[
+                inference_frame["fold"].eq(fold), "problem_id"
+            ].astype(str)
+        )
+        if (
+            fold_groups & set(provenance["train_groups"])
+            or not fold_groups.issubset(set(provenance["validation_groups"]))
+        ):
+            raise ValueError(
+                f"CodeBERT fold {int(fold)} OOF groups are inconsistent with provenance."
+            )
+        heads_by_fold[int(fold)] = joblib.load(model_path)
+
     all_text = pd.concat(
-        [frame["code_v0_no_empty_lines"], frame["code_v1_no_empty_lines"]],
+        [
+            inference_frame["code_v0_no_empty_lines"],
+            inference_frame["code_v1_no_empty_lines"],
+        ],
         ignore_index=True,
     ).astype(str)
     unique_text = pd.unique(all_text)
     text_index = {text: index for index, text in enumerate(unique_text)}
     index_v0 = np.fromiter(
-        (text_index[text] for text in frame["code_v0_no_empty_lines"].astype(str)),
+        (text_index[text] for text in inference_frame["code_v0_no_empty_lines"].astype(str)),
         dtype=np.int64,
-        count=len(frame),
+        count=len(inference_frame),
     )
     index_v1 = np.fromiter(
-        (text_index[text] for text in frame["code_v1_no_empty_lines"].astype(str)),
+        (text_index[text] for text in inference_frame["code_v1_no_empty_lines"].astype(str)),
         dtype=np.int64,
-        count=len(frame),
+        count=len(inference_frame),
     )
-    inference_frame = frame.sample(n=min(inference_pairs, len(frame)), random_state=42)
 
     def encode(texts):
         vectors = np.empty((len(texts), encoder.config.hidden_size), dtype=np.float32)
@@ -616,25 +789,26 @@ def codebert_measurement_tasks(
         estimator.fit(features, target)
 
     def inference_task():
-        count = len(inference_frame)
-        texts = pd.concat(
-            [
-                inference_frame["code_v0_no_empty_lines"],
-                inference_frame["code_v1_no_empty_lines"],
-            ],
-            ignore_index=True,
-        ).astype(str).tolist()
-        vectors = encode(texts)
-        features = np.concatenate(
-            [vectors[:count], vectors[count:], vectors[count:] - vectors[:count]],
-            axis=1,
-        )
-        head.predict_proba(features)
+        vectors = encode(unique_text)
+        for fold, fold_frame in inference_frame.groupby("fold", sort=True):
+            row_indices = fold_frame.index.to_numpy()
+            features = np.concatenate(
+                [
+                    vectors[index_v0[row_indices]],
+                    vectors[index_v1[row_indices]],
+                    vectors[index_v1[row_indices]] - vectors[index_v0[row_indices]],
+                ],
+                axis=1,
+            )
+            heads_by_fold[int(fold)].predict_proba(features)
 
     return {
         "training": training_task,
         "inference": inference_task,
         "inference_pairs": len(inference_frame),
+        "dataset_pairs": len(frame),
+        "inference_sample_seed": 42,
+        "inference_groups": int(inference_frame["problem_id"].nunique()),
         "device": device,
         "encoder": encoder,
         "tokenizer": tokenizer,

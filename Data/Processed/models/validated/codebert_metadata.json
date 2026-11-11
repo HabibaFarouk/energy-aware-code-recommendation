@@ -3,7 +3,9 @@
   "model_id": "microsoft/codebert-base",
   "encoder_frozen": true,
   "pooling": "attention-mask mean pooling",
-  "max_length": 256,
+  "max_length": 512,
+  "special_tokens_added_by_tokenizer": true,
+  "positional_embedding_limit": 512,
   "classifier": "StandardScaler + class-balanced LogisticRegression",
   "feature_layout": [
     "embedding_v0",
@@ -18,6 +20,7 @@
   },
   "group_column": "problem_id",
   "group_kfold_splits": 5,
-  "embedding_seconds": 5023.339113800321,
-  "embedding_unique_code_count": 40776
+  "embedding_seconds": 11473.89429199975,
+  "embedding_unique_code_count": 40776,
+  "device": "cpu"
 }

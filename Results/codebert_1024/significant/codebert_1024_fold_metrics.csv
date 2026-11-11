@@ -1,0 +1,6 @@
+model,feature_config,fold,accuracy,balanced_accuracy,f1,roc_auc,train_groups,validation_groups
+codebert_1024_frozen_embeddings_logistic_regression,codebert_1024_embeddings,1,0.485,0.4847083926031294,0.4699828473413379,0.47571790540540543,382,94
+codebert_1024_frozen_embeddings_logistic_regression,codebert_1024_embeddings,2,0.475,0.475030836416975,0.4741235392320534,0.4582402684712916,382,94
+codebert_1024_frozen_embeddings_logistic_regression,codebert_1024_embeddings,3,0.505,0.5052236732425675,0.5074626865671642,0.5142595165323701,380,96
+codebert_1024_frozen_embeddings_logistic_regression,codebert_1024_embeddings,4,0.4866666666666667,0.4884249966546233,0.4866666666666667,0.4940731076319194,380,96
+codebert_1024_frozen_embeddings_logistic_regression,codebert_1024_embeddings,5,0.475,0.47360066833751047,0.5007923930269413,0.4849791144527986,380,96

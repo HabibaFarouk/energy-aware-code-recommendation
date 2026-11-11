@@ -113,7 +113,7 @@
     "target": "energy_winner",
     "group_column": "group_id",
     "implemented": true,
-    "note": "Notebook 04 trains frozen CodeBERT embeddings with a Logistic Regression head on both validated and significant prepared datasets; torch and transformers are optional dependencies."
+    "note": "Notebook 04 trains a frozen CodeBERT embedding model with a Logistic Regression head on significant_energy_diff.parquet; torch and transformers are optional dependencies."
   },
   "feature_variance_audit": {
     "zero_variance_features_by_dataset": {

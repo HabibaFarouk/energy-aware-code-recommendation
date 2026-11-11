@@ -1,0 +1,2 @@
+model,feature_config,accuracy_mean,accuracy_std,balanced_accuracy_mean,balanced_accuracy_std,f1_mean,f1_std,roc_auc_mean,roc_auc_std
+codebert_1024_frozen_embeddings_logistic_regression,codebert_1024_embeddings,0.48533333333333334,0.012270108212870653,0.4853977134509611,0.012741180295908617,0.48780562656683274,0.016288065521705447,0.48545398249875704,0.020854562072962473

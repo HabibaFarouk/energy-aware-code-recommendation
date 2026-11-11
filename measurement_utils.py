@@ -652,6 +652,384 @@ def initialize_resource_experiment(
     return state
 
 
+def initialize_codebert_resource_experiment(
+    project_root,
+    sampling_interval_seconds=0.1,
+):
+    root = Path(project_root).resolve()
+    processed_dir = root / "Data" / "Processed"
+    results_root = root / "Results"
+    run_id = (
+        datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%z")
+        + "_"
+        + uuid.uuid4().hex[:8]
+    )
+    run_root = results_root / "resource_measurements" / run_id
+    run_root.mkdir(parents=True, exist_ok=False)
+
+    logical_cores = psutil.cpu_count(logical=True) or 1
+    physical_cores = psutil.cpu_count(logical=False)
+    virtual_memory = psutil.virtual_memory()
+    frequency = psutil.cpu_freq()
+    environment = {
+        "run_id": run_id,
+        "measurement_datetime": datetime.now(timezone.utc).astimezone().isoformat(),
+        "operating_system": platform.platform(),
+        "system": platform.system(),
+        "processor": platform.processor() or platform.machine(),
+        "physical_cpu_cores": physical_cores,
+        "logical_cpu_threads": logical_cores,
+        "cpu_frequency_mhz": frequency.current if frequency else None,
+        "total_ram_gb": round(virtual_memory.total / 1024**3, 3),
+        "available_ram_at_start_gb": round(virtual_memory.available / 1024**3, 3),
+        "python_version": sys.version,
+        "library_versions": _library_versions(),
+        "measurement_device": "CPU",
+        "gpu_monitoring_included": False,
+        "sampling_interval_seconds": sampling_interval_seconds,
+    }
+    _write_json_new(run_root / "environment.json", environment)
+    energy_counter = EnergyCounter()
+    datasets = {}
+    for dataset_name, file_name in DATASET_FILES.items():
+        dataset_path = processed_dir / file_name
+        if not dataset_path.is_file():
+            raise FileNotFoundError(f"Prepared dataset is missing: {dataset_path}")
+        datasets[dataset_name] = {
+            "dataset_name": dataset_name,
+            "dataset_path": dataset_path,
+            "model_dir": processed_dir / "models" / dataset_name,
+            "logical_cores": logical_cores,
+            "sampling_interval_seconds": sampling_interval_seconds,
+            "energy_counter": energy_counter,
+        }
+
+    run_metadata = {
+        "run_id": run_id,
+        "environment_file": "environment.json",
+        "model": "frozen CodeBERT embeddings with Logistic Regression head",
+        "measurement_device": "CPU",
+        "inference_sample_pairs_requested": 100,
+        "inference_repetitions_requested": 10,
+        "training_definition": (
+            "Grouped five-fold evaluation and final head training, including tokenizer/encoder "
+            "loading, frozen-encoder embedding extraction, and result artifact writes."
+        ),
+        "inference_definition": (
+            "Sampled out-of-fold pairs are encoded and predicted by their already-fitted "
+            "group-held-out fold heads for 10 repetitions; model loading is excluded. "
+            "Energy per pair is extrapolated linearly to the prepared dataset pair count."
+        ),
+        "datasets": {},
+    }
+    meter_rows = []
+    for dataset_name in datasets:
+        for workload, repetitions in (("training", 1), ("inference", 10)):
+            for repetition in range(1, repetitions + 1):
+                for task in (workload, "idle"):
+                    meter_rows.append(
+                        {
+                            "initial_energy_reading": None,
+                            "final_energy_reading": None,
+                            "meter_unit": None,
+                            "measurement_duration_seconds": None,
+                            "experiment_name": f"CodeBERT {dataset_name} {workload}",
+                            "dataset": dataset_name,
+                            "model_name": "codebert_frozen_embeddings_logistic_regression",
+                            "task": task,
+                            "repetition": repetition,
+                            "notes": (
+                                f"Pair this {task} reading with {workload} repetition {repetition}."
+                            ),
+                        }
+                    )
+    manual_meter_template = create_manual_meter_template(run_root, meter_rows)
+    return {
+        "root": root,
+        "run_id": run_id,
+        "run_root": run_root,
+        "manual_meter_template": manual_meter_template,
+        "environment": environment,
+        "energy_counter": energy_counter,
+        "logical_cores": logical_cores,
+        "sampling_interval_seconds": sampling_interval_seconds,
+        "datasets": datasets,
+        "run_metadata": run_metadata,
+    }
+
+
+def _codebert_dataset(state, dataset_name):
+    try:
+        return state["datasets"][dataset_name]
+    except KeyError as exc:
+        raise ValueError(f"Unknown CodeBERT dataset: {dataset_name!r}") from exc
+
+
+def _sample_codebert_workload(workload, state):
+    try:
+        from codecarbon import EmissionsTracker
+    except ImportError:
+        tracker = None
+    else:
+        tracker = EmissionsTracker(
+            project_name="energy_aware_recommendation_codebert",
+            save_to_file=False,
+            save_to_logger=False,
+            save_to_api=False,
+            log_level="error",
+        )
+        tracker.start()
+
+    try:
+        measurement, result = _sample_workload(
+            workload,
+            state["energy_counter"],
+            state["logical_cores"],
+            state["sampling_interval_seconds"],
+        )
+    finally:
+        if tracker is not None:
+            tracker.stop()
+
+    if tracker is None:
+        measurement["codecarbon_estimated_energy_joules"] = None
+        measurement["codecarbon_estimate_status"] = "unavailable: CodeCarbon is not installed"
+    else:
+        emissions_data = tracker.final_emissions_data
+        if emissions_data is None:
+            raise RuntimeError("CodeCarbon did not return final emissions data.")
+        measurement["codecarbon_estimated_energy_joules"] = (
+            float(emissions_data.energy_consumed) * 3_600_000
+        )
+        measurement["codecarbon_estimate_status"] = "estimated"
+    return measurement, result
+
+
+def _save_codebert_run_metadata_if_complete(state):
+    dataset_names = tuple(state["datasets"])
+    expected_files = (
+        "training_measurements.csv",
+        "inference_measurements.csv",
+    )
+    if not all(
+        (state["run_root"] / "codebert" / name / filename).is_file()
+        for name in dataset_names
+        for filename in expected_files
+    ):
+        return
+
+    for dataset_name in dataset_names:
+        dataset = state["datasets"][dataset_name]
+        output = state["run_root"] / "codebert" / dataset_name
+        _write_json_new(
+            output / "measurement_status.json",
+            {
+                "dataset": dataset_name,
+                "run_id": state["run_id"],
+                "encoder_frozen": True,
+                "measurement_device": "CPU",
+                "training_encoder_loading_included": True,
+                "inference_encoder_loading_included": False,
+                "gpu_monitoring_included": False,
+                "energy_source": state["energy_counter"].backend,
+                "actual_energy_available": state["energy_counter"].backend is not None,
+                "training_measurements": "training_measurements.csv",
+                "inference_measurements": "inference_measurements.csv",
+                "external_power_meter_template": str(
+                    state["manual_meter_template"].relative_to(state["root"])
+                ),
+                "prepared_dataset": str(dataset["dataset_path"].relative_to(state["root"])),
+            },
+        )
+        state["run_metadata"]["datasets"][dataset_name] = {
+            "prepared_dataset": str(dataset["dataset_path"].relative_to(state["root"])),
+            "training_measurements": str(
+                (output / "training_measurements.csv").relative_to(state["root"])
+            ),
+            "inference_measurements": str(
+                (output / "inference_measurements.csv").relative_to(state["root"])
+            ),
+            "measurement_status_file": str(
+                (output / "measurement_status.json").relative_to(state["root"])
+            ),
+        }
+    _write_json_new(state["run_root"] / "run_metadata.json", state["run_metadata"])
+
+
+def train_and_measure_codebert_dataset(
+    state,
+    dataset_name,
+    max_length=512,
+    batch_size=8,
+):
+    from experiment_utils import train_codebert_dataset
+
+    dataset = _codebert_dataset(state, dataset_name)
+
+    def train():
+        return train_codebert_dataset(
+            dataset_name=dataset_name,
+            dataset_path=dataset["dataset_path"],
+            results_dir=state["root"] / "Results" / dataset_name,
+            model_dir=dataset["model_dir"],
+            max_length=max_length,
+            batch_size=batch_size,
+            force_cpu=True,
+        )
+
+    measurement, performance = _sample_codebert_workload(
+        train,
+        state,
+    )
+    training_metadata = json.loads(
+        (dataset["model_dir"] / "codebert_metadata.json").read_text(encoding="utf-8")
+    )
+    measurement.update(
+        {
+            "dataset": dataset_name,
+            "model": "codebert_frozen_embeddings_logistic_regression",
+            "feature_config": "codebert_embeddings",
+            "task": "training",
+            "repetition": 1,
+            "measurement_device": "cpu",
+            "encoder_loading_included": True,
+            "training_includes_embedding_extraction": True,
+            "gpu_monitoring_included": False,
+            "n_training_pairs": training_metadata["n_pairs"],
+            "n_problem_groups": training_metadata["n_problem_groups"],
+            "idle_baseline_energy_joules": None,
+            "net_actual_energy_joules": None,
+        }
+    )
+    measurements = [measurement]
+    if state["energy_counter"].backend is not None:
+        idle = _paired_idle(
+            measurement["elapsed_seconds"],
+            dataset,
+            measurement["model"],
+            "codebert_embeddings",
+            "training",
+            1,
+        )
+        measurement["idle_baseline_energy_joules"] = idle["actual_energy_joules"]
+        measurement["net_actual_energy_joules"] = (
+            measurement["actual_energy_joules"] - idle["actual_energy_joules"]
+            if measurement["actual_energy_joules"] is not None
+            and idle["actual_energy_joules"] is not None
+            else None
+        )
+        measurements.append(idle)
+
+    result = pd.DataFrame(measurements)
+    output = state["run_root"] / "codebert" / dataset_name
+    _write_csv_new(output / "training_measurements.csv", result)
+    _save_codebert_run_metadata_if_complete(state)
+    return performance, result
+
+
+def measure_codebert_inference(
+    state,
+    dataset_name,
+    inference_pairs=100,
+    inference_repetitions=10,
+    batch_size=8,
+):
+    from experiment_utils import codebert_measurement_tasks
+
+    if not isinstance(inference_repetitions, int) or inference_repetitions < 1:
+        raise ValueError("inference_repetitions must be a positive integer.")
+    dataset = _codebert_dataset(state, dataset_name)
+    tasks = codebert_measurement_tasks(
+        dataset["dataset_path"],
+        dataset["model_dir"],
+        state["root"] / "Results" / dataset_name,
+        batch_size=batch_size,
+        inference_pairs=inference_pairs,
+        force_cpu=True,
+    )
+    measured_rows = []
+    idle_rows = []
+    for repetition in range(1, inference_repetitions + 1):
+        measurement, _ = _sample_codebert_workload(
+            tasks["inference"],
+            state,
+        )
+        measurement.update(
+            {
+                "dataset": dataset_name,
+                "model": "codebert_frozen_embeddings_logistic_regression",
+                "feature_config": "codebert_embeddings",
+                "task": "inference",
+                "repetition": repetition,
+                "n_inference_pairs": tasks["inference_pairs"],
+                "n_inference_predictions": tasks["inference_pairs"],
+                "extrapolation_target_pairs": tasks["dataset_pairs"],
+                "inference_sample_seed": tasks["inference_sample_seed"],
+                "measurement_device": str(tasks["device"]),
+                "encoder_loading_included": False,
+                "gpu_monitoring_included": False,
+            }
+        )
+        energy = measurement["actual_energy_joules"]
+        measurement["gross_actual_energy_joules_per_pair"] = (
+            energy / tasks["inference_pairs"] if energy is not None else None
+        )
+        idle = None
+        if state["energy_counter"].backend is not None:
+            idle = _paired_idle(
+                measurement["elapsed_seconds"],
+                dataset,
+                measurement["model"],
+                "codebert_embeddings",
+                "inference",
+                repetition,
+            )
+            net_energy = (
+                energy - idle["actual_energy_joules"]
+                if energy is not None and idle["actual_energy_joules"] is not None
+                else None
+            )
+            measurement["idle_baseline_energy_joules"] = idle["actual_energy_joules"]
+            measurement["net_actual_energy_joules"] = net_energy
+            idle["n_inference_pairs"] = tasks["inference_pairs"]
+            idle_rows.append(idle)
+        else:
+            net_energy = None
+            measurement["idle_baseline_energy_joules"] = None
+            measurement["net_actual_energy_joules"] = None
+        measurement["net_actual_energy_joules_per_pair"] = (
+            net_energy / tasks["inference_pairs"] if net_energy is not None else None
+        )
+        codecarbon_energy = measurement["codecarbon_estimated_energy_joules"]
+        measurement["codecarbon_estimated_energy_joules_per_pair"] = (
+            codecarbon_energy / tasks["inference_pairs"]
+            if codecarbon_energy is not None
+            else None
+        )
+        measurement["extrapolated_gross_actual_energy_joules"] = (
+            energy / tasks["inference_pairs"] * tasks["dataset_pairs"]
+            if energy is not None
+            else None
+        )
+        measurement["extrapolated_net_actual_energy_joules"] = (
+            net_energy / tasks["inference_pairs"] * tasks["dataset_pairs"]
+            if net_energy is not None
+            else None
+        )
+        measurement["extrapolated_codecarbon_estimated_energy_joules"] = (
+            codecarbon_energy / tasks["inference_pairs"] * tasks["dataset_pairs"]
+            if codecarbon_energy is not None
+            else None
+        )
+        measured_rows.append(measurement)
+
+    measurements = pd.DataFrame([*measured_rows, *idle_rows])
+    output = state["run_root"] / "codebert" / dataset_name
+    _write_csv_new(output / "inference_measurements.csv", measurements)
+    _save_codebert_run_metadata_if_complete(state)
+    return measurements
+
+
 def run_training_measurements(state):
     rows = []
     idle_rows = []
@@ -925,25 +1303,26 @@ def run_inference_measurements(state):
     return measurements, fold_measurements, idle_measurements
 
 
-def create_manual_meter_template(run_root):
+def create_manual_meter_template(run_root, template_rows=None):
     path = Path(run_root) / "external_power_meter_manual_entry.csv"
-    if not path.exists():
-        _write_csv_new(
-            path,
-            pd.DataFrame(
-                columns=[
-                    "initial_energy_reading",
-                    "final_energy_reading",
-                    "meter_unit",
-                    "measurement_duration_seconds",
-                    "experiment_name",
-                    "model_name",
-                    "task",
-                    "repetition",
-                    "notes",
-                ]
-            ),
-        )
+    if path.exists():
+        if template_rows is not None:
+            raise FileExistsError(f"Refusing to overwrite manual-meter template: {path}")
+        return path
+    columns = [
+        "initial_energy_reading",
+        "final_energy_reading",
+        "meter_unit",
+        "measurement_duration_seconds",
+        "experiment_name",
+        "model_name",
+        "task",
+        "repetition",
+        "notes",
+    ]
+    if template_rows and any("dataset" in row for row in template_rows):
+        columns.insert(columns.index("model_name"), "dataset")
+    _write_csv_new(path, pd.DataFrame(template_rows, columns=columns))
     return path
 
 
@@ -1173,99 +1552,30 @@ def run_codebert_resource_measurements(
     state,
     training_repetitions=1,
     inference_repetitions=10,
+    inference_pairs=100,
 ):
-    from experiment_utils import codebert_measurement_tasks
-
-    rows = []
-    for dataset_name, dataset in state["datasets"].items():
-        tasks = codebert_measurement_tasks(
-            state["root"] / "Data" / "Processed" / DATASET_FILES[dataset_name],
-            dataset["model_dir"],
-            force_cpu=True,
+    if training_repetitions != 1:
+        raise ValueError(
+            "CodeBERT grouped training is one complete measured run per dataset; "
+            "set training_repetitions to 1."
         )
-        task_repetitions = {
-            "training": training_repetitions,
-            "inference": inference_repetitions,
-        }
-        for task_name, repetitions in task_repetitions.items():
-            for repetition in range(1, repetitions + 1):
-                measurement, _ = _sample_workload(
-                    tasks[task_name],
-                    state["energy_counter"],
-                    state["logical_cores"],
-                    state["sampling_interval_seconds"],
-                )
-                measurement.update(
-                    {
-                        "dataset": dataset_name,
-                        "model": "codebert_frozen_embeddings_logistic_regression",
-                        "task": task_name,
-                        "repetition": repetition,
-                        "n_inference_pairs": (
-                            tasks["inference_pairs"]
-                            if task_name == "inference"
-                            else None
-                        ),
-                        "measurement_device": str(tasks["device"]),
-                        "encoder_loading_included": False,
-                        "training_includes_embedding_extraction": (
-                            task_name == "training"
-                        ),
-                        "gpu_monitoring_included": False,
-                    }
-                )
-                if state["energy_counter"].backend is not None:
-                    idle = _paired_idle(
-                        measurement["elapsed_seconds"],
-                        dataset,
-                        "codebert_frozen_embeddings_logistic_regression",
-                        "codebert_embeddings",
-                        task_name,
-                        repetition,
-                    )
-                    idle["n_inference_pairs"] = (
-                        tasks["inference_pairs"] if task_name == "inference" else None
-                    )
-                    measurement["idle_baseline_energy_joules"] = idle[
-                        "actual_energy_joules"
-                    ]
-                    measurement["net_actual_energy_joules"] = (
-                        measurement["actual_energy_joules"]
-                        - idle["actual_energy_joules"]
-                        if measurement["actual_energy_joules"] is not None
-                        and idle["actual_energy_joules"] is not None
-                        else None
-                    )
-                    rows.append(idle)
-                else:
-                    measurement["idle_baseline_energy_joules"] = None
-                    measurement["net_actual_energy_joules"] = None
-                rows.append(measurement)
-        del tasks
-
-    measurements = pd.DataFrame(rows)
+    rows = []
     for dataset_name in state["datasets"]:
+        _, training = train_and_measure_codebert_dataset(
+            state,
+            dataset_name,
+        )
+        inference = measure_codebert_inference(
+            state,
+            dataset_name,
+            inference_pairs=inference_pairs,
+            inference_repetitions=inference_repetitions,
+        )
+        measurements = pd.concat([training, inference], ignore_index=True, sort=False)
         output = state["run_root"] / "codebert" / dataset_name
         _write_csv_new(
             output / "codebert_resource_measurements.csv",
-            measurements.loc[measurements["dataset"].eq(dataset_name)],
+            measurements,
         )
-        _write_json_new(
-            output / "measurement_status.json",
-            {
-                "dataset": dataset_name,
-                "run_id": state["run_id"],
-                "encoder_frozen": True,
-                "training_includes_embedding_extraction": True,
-                "encoder_loading_included": False,
-                "gpu_available_to_pytorch": torch.cuda.is_available(),
-                "measurement_device": "cpu",
-                "gpu_monitoring_included": False,
-                "comparison_with_tabular_models": (
-                    "Keep separate; encoder and GPU resource-accounting conditions differ."
-                ),
-                "energy_source": state["energy_counter"].backend,
-                "actual_energy_available": state["energy_counter"].backend is not None,
-            },
-        )
-    return measurements
+        rows.append(measurements)
+    return pd.concat(rows, ignore_index=True, sort=False)

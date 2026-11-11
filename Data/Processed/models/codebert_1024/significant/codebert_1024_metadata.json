@@ -1,0 +1,27 @@
+{
+  "dataset": "significant",
+  "model_id": "microsoft/codebert-base",
+  "encoder_frozen": true,
+  "positional_embedding_extension": "linear interpolation of pretrained usable position vectors",
+  "original_max_length": 256,
+  "max_length": 1024,
+  "pooling": "attention-mask mean pooling",
+  "classifier": "StandardScaler + class-balanced LogisticRegression",
+  "feature_layout": [
+    "embedding_v0",
+    "embedding_v1",
+    "embedding_v1_minus_embedding_v0"
+  ],
+  "n_pairs": 3000,
+  "n_problem_groups": 476,
+  "class_counts": {
+    "1": 1521,
+    "0": 1479
+  },
+  "group_column": "problem_id",
+  "group_kfold_splits": 5,
+  "embedding_seconds": 1829.9735224996693,
+  "embedding_unique_code_count": 5848,
+  "batch_size": 4,
+  "device": "cpu"
+}

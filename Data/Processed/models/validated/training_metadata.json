@@ -27,12 +27,7 @@
   "target": "energy_winner",
   "group_column": "group_id",
   "group_kfold_splits": 5,
-  "models": [
-    "majority_baseline",
-    "logistic_regression",
-    "random_forest",
-    "xgboost"
-  ],
+  "fold_model_directory": "config_B/fold_models",
   "model_hyperparameters": {
     "logistic_regression": {
       "scaler": "StandardScaler",
@@ -55,5 +50,10 @@
       "eval_metric": "logloss"
     }
   },
-  "fold_model_directory": "config_B/fold_models"
+  "models": [
+    "majority_baseline",
+    "logistic_regression",
+    "random_forest",
+    "xgboost"
+  ]
 }
