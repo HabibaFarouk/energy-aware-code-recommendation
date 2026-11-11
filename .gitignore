@@ -26,7 +26,7 @@ Thumbs.db
 *.pth
 *.h5
 
-*.Data/Raw/public_classified_smells.jsonl 
+Data/Raw/public_classified_smells.jsonl 
 
 # Large CodeBERT model files
 Data/Processed/models/
