@@ -28,4 +28,11 @@ Thumbs.db
 
 *.Data/Raw/public_classified_smells.jsonl 
 
+# Large CodeBERT model files
+Data/Processed/models/
+
+# Large raw dataset
+Data/Raw/public_validated_smells.jsonl
+Data/Raw/public_significant_smells.jsonl
+
 # Temporary experiment outputs
