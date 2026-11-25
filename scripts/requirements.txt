@@ -1,0 +1,17 @@
+# Minimal dependency list for running the measurement scripts on the LRZ testbed.
+#
+# This is a starter list based on what measurement_utils.py and experiment_utils.py
+# import. For real reproducibility, replace this with the exact versions from your
+# laptop: run `pip freeze > scripts/requirements.txt` in your local project's
+# Python environment and copy the relevant lines in here instead, so the testbed
+# measures the same library versions you used for the quality/accuracy results.
+numpy
+pandas
+scikit-learn
+xgboost
+psutil
+joblib
+pyarrow
+torch
+transformers
+codecarbon

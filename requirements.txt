@@ -1,0 +1,28 @@
+# Project dependencies for energy-aware-code-recommendation.
+#
+# This is a starter list derived from every import across experiment_utils.py,
+# measurement_utils.py, and the Notebooks/ folder -- it does NOT pin exact
+# versions. For real reproducibility (so that a rerun months from now, or on the
+# testbed, uses the same library versions as your original quality/accuracy
+# results), replace this file with the output of:
+#
+#   pip freeze > requirements.txt
+#
+# run inside your project's actual .venv/conda environment, then remove any
+# unrelated packages pip freeze picks up from the global environment if you
+# are not using an isolated virtualenv.
+
+numpy
+pandas
+scikit-learn
+xgboost
+torch
+transformers
+codecarbon
+pyarrow
+psutil
+joblib
+matplotlib
+seaborn
+ipython
+jupyter

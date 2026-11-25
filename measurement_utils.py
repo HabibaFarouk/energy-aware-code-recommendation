@@ -752,7 +752,15 @@ def initialize_resource_experiment(
 def initialize_codebert_resource_experiment(
     project_root,
     sampling_interval_seconds=0.1,
+    training_repetitions_by_dataset=None,
 ):
+    """training_repetitions_by_dataset: optional dict like
+    {"validated": 3, "significant": 10} used only to size the manual
+    power-meter template and run_metadata; actual training repetitions
+    are controlled by the training_repetitions argument passed to
+    train_and_measure_codebert_dataset for each dataset.
+    """
+    repetitions_by_dataset = training_repetitions_by_dataset or {}
     root = Path(project_root).resolve()
     processed_dir = root / "Data" / "Processed"
     results_root = root / "Results"
@@ -808,9 +816,12 @@ def initialize_codebert_resource_experiment(
         "measurement_device": "CPU",
         "inference_sample_pairs_requested": 100,
         "inference_repetitions_requested": 10,
+        "training_repetitions_requested_by_dataset": dict(repetitions_by_dataset),
         "training_definition": (
             "Grouped five-fold evaluation and final head training, including tokenizer/encoder "
-            "loading, frozen-encoder embedding extraction, and result artifact writes."
+            "loading, frozen-encoder embedding extraction, and result artifact writes, repeated "
+            "training_repetitions times per dataset (validated=3, significant=10 per supervisor "
+            "feedback)."
         ),
         "inference_definition": (
             "Sampled out-of-fold pairs are encoded and predicted by their already-fitted "
@@ -821,7 +832,8 @@ def initialize_codebert_resource_experiment(
     }
     meter_rows = []
     for dataset_name in datasets:
-        for workload, repetitions in (("training", 1), ("inference", 10)):
+        training_reps = repetitions_by_dataset.get(dataset_name, 1)
+        for workload, repetitions in (("training", training_reps), ("inference", 10)):
             for repetition in range(1, repetitions + 1):
                 for task in (workload, "idle"):
                     meter_rows.append(
@@ -972,8 +984,24 @@ def train_and_measure_codebert_dataset(
     dataset_name,
     max_length=512,
     batch_size=8,
+    training_repetitions=1,
 ):
+    """Train the CodeBERT head and measure training resources.
+
+    training_repetitions repeats the complete grouped-training workload
+    (tokenizer/encoder loading, embedding extraction, five-fold grouped
+    fitting, and final full-data fit) that many times, mirroring how the
+    tabular models in run_training_measurements are repeated. Each
+    repetition overwrites the saved model/metadata artifacts with an
+    identical deterministic result (same seed, same data); only the
+    resource measurement differs per repetition. Per professor's
+    feedback: use training_repetitions=3 for the validated dataset and
+    training_repetitions=10 for the significant dataset.
+    """
     from experiment_utils import train_codebert_dataset
+
+    if not isinstance(training_repetitions, int) or training_repetitions < 1:
+        raise ValueError("training_repetitions must be a positive integer.")
 
     dataset = _codebert_dataset(state, dataset_name)
 
@@ -988,48 +1016,51 @@ def train_and_measure_codebert_dataset(
             force_cpu=True,
         )
 
-    measurement, performance = _sample_codebert_workload(
-        train,
-        state,
-    )
-    training_metadata = json.loads(
-        (dataset["model_dir"] / "codebert_metadata.json").read_text(encoding="utf-8")
-    )
-    measurement.update(
-        {
-            "dataset": dataset_name,
-            "model": "codebert_frozen_embeddings_logistic_regression",
-            "feature_config": "codebert_embeddings",
-            "task": "training",
-            "repetition": 1,
-            "measurement_device": "cpu",
-            "encoder_loading_included": True,
-            "training_includes_embedding_extraction": True,
-            "gpu_monitoring_included": False,
-            "n_training_pairs": training_metadata["n_pairs"],
-            "n_problem_groups": training_metadata["n_problem_groups"],
-            "idle_baseline_energy_joules": None,
-            "net_actual_energy_joules": None,
-        }
-    )
-    measurements = [measurement]
-    if state["energy_counter"].backend is not None:
-        idle = _paired_idle(
-            measurement["elapsed_seconds"],
-            dataset,
-            measurement["model"],
-            "codebert_embeddings",
-            "training",
-            1,
+    measurements = []
+    performance = None
+    for repetition in range(1, training_repetitions + 1):
+        measurement, performance = _sample_codebert_workload(
+            train,
+            state,
         )
-        measurement["idle_baseline_energy_joules"] = idle["actual_energy_joules"]
-        measurement["net_actual_energy_joules"] = (
-            measurement["actual_energy_joules"] - idle["actual_energy_joules"]
-            if measurement["actual_energy_joules"] is not None
-            and idle["actual_energy_joules"] is not None
-            else None
+        training_metadata = json.loads(
+            (dataset["model_dir"] / "codebert_metadata.json").read_text(encoding="utf-8")
         )
-        measurements.append(idle)
+        measurement.update(
+            {
+                "dataset": dataset_name,
+                "model": "codebert_frozen_embeddings_logistic_regression",
+                "feature_config": "codebert_embeddings",
+                "task": "training",
+                "repetition": repetition,
+                "measurement_device": "cpu",
+                "encoder_loading_included": True,
+                "training_includes_embedding_extraction": True,
+                "gpu_monitoring_included": False,
+                "n_training_pairs": training_metadata["n_pairs"],
+                "n_problem_groups": training_metadata["n_problem_groups"],
+                "idle_baseline_energy_joules": None,
+                "net_actual_energy_joules": None,
+            }
+        )
+        measurements.append(measurement)
+        if state["energy_counter"].backend is not None:
+            idle = _paired_idle(
+                measurement["elapsed_seconds"],
+                dataset,
+                measurement["model"],
+                "codebert_embeddings",
+                "training",
+                repetition,
+            )
+            measurement["idle_baseline_energy_joules"] = idle["actual_energy_joules"]
+            measurement["net_actual_energy_joules"] = (
+                measurement["actual_energy_joules"] - idle["actual_energy_joules"]
+                if measurement["actual_energy_joules"] is not None
+                and idle["actual_energy_joules"] is not None
+                else None
+            )
+            measurements.append(idle)
 
     result = pd.DataFrame(measurements)
     output = state["run_root"] / "codebert" / dataset_name
@@ -1726,17 +1757,21 @@ def run_codebert_resource_measurements(
     training_repetitions=1,
     inference_repetitions=10,
     inference_pairs=100,
+    training_repetitions_by_dataset=None,
 ):
-    if training_repetitions != 1:
-        raise ValueError(
-            "CodeBERT grouped training is one complete measured run per dataset; "
-            "set training_repetitions to 1."
-        )
+    """Convenience wrapper running training + inference measurement for every dataset.
+
+    training_repetitions_by_dataset optionally overrides training_repetitions per
+    dataset name, e.g. {"validated": 3, "significant": 10}, per professor's feedback.
+    """
+    repetitions_by_dataset = training_repetitions_by_dataset or {}
     rows = []
     for dataset_name in state["datasets"]:
+        dataset_repetitions = repetitions_by_dataset.get(dataset_name, training_repetitions)
         _, training = train_and_measure_codebert_dataset(
             state,
             dataset_name,
+            training_repetitions=dataset_repetitions,
         )
         inference = measure_codebert_inference(
             state,
