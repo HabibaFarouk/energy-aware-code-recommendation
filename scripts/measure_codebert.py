@@ -28,7 +28,18 @@ Prerequisites on the testbed node:
 
 Usage on the testbed node:
     python3 scripts/measure_codebert.py
+        (runs both datasets, full repetition counts -- the original behaviour)
+    python3 scripts/measure_codebert.py --dataset validated --reps 1
+        (runs only "validated", 1 training repetition -- use this to split a
+        long run across multiple shorter testbed reservations; call this
+        three times in three separate 6h reservations to get all 3 validated
+        repetitions, since each call writes to its own timestamped results
+        folder and nothing is overwritten between calls)
+    python3 scripts/measure_codebert.py --dataset significant --reps 5
+        (runs only "significant", 5 training repetitions; call this twice to
+        get all 10 significant repetitions)
 """
+import argparse
 import sys
 from pathlib import Path
 
@@ -69,11 +80,46 @@ TRAINING_REPETITIONS_BY_DATASET = {
 }
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Run CodeBERT resource measurements, optionally restricted "
+        "to one dataset and a custom repetition count (useful for splitting a "
+        "long run across several shorter testbed reservations)."
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=sorted(TRAINING_REPETITIONS_BY_DATASET.keys()),
+        default=None,
+        help="Run only this dataset instead of both. Default: run both "
+        "datasets (the original, pre-splitting behaviour).",
+    )
+    parser.add_argument(
+        "--reps",
+        type=int,
+        default=None,
+        help="Override the number of training repetitions for the selected "
+        "dataset (requires --dataset). Default: use the value from "
+        "TRAINING_REPETITIONS_BY_DATASET (validated=3, significant=10).",
+    )
+    args = parser.parse_args()
+    if args.reps is not None and args.dataset is None:
+        parser.error("--reps requires --dataset (it only applies to one dataset at a time).")
+    return args
+
+
 def main():
+    args = parse_args()
+
+    if args.dataset is not None:
+        reps = args.reps if args.reps is not None else TRAINING_REPETITIONS_BY_DATASET[args.dataset]
+        datasets_to_run = {args.dataset: reps}
+    else:
+        datasets_to_run = TRAINING_REPETITIONS_BY_DATASET
+
     resource_state = initialize_codebert_resource_experiment(
         ROOT,
         sampling_interval_seconds=PROCESS_SAMPLING_INTERVAL_SECONDS,
-        training_repetitions_by_dataset=TRAINING_REPETITIONS_BY_DATASET,
+        training_repetitions_by_dataset=datasets_to_run,
     )
 
     print("=" * 70)
@@ -88,11 +134,11 @@ def main():
             "/sys/class/powercap/intel-rapl:*/energy_uj is readable, or that the "
             "Scaphandre metrics endpoint is reachable."
         )
-    print("Training repetitions by dataset:", TRAINING_REPETITIONS_BY_DATASET)
+    print("Training repetitions by dataset (this run):", datasets_to_run)
     print(f"Inference repetitions: {INFERENCE_REPETITIONS}")
     print("=" * 70)
 
-    for dataset_name, training_repetitions in TRAINING_REPETITIONS_BY_DATASET.items():
+    for dataset_name, training_repetitions in datasets_to_run.items():
         print(f"\n--- {dataset_name}: training ({training_repetitions} repetitions) ---")
         performance, training_measurements = train_and_measure_codebert_dataset(
             resource_state,
