@@ -1,0 +1,6 @@
+dataset,feature_config,fold,n_unique_samples
+validated,config_A,1,27
+validated,config_A,2,20
+validated,config_A,3,19
+validated,config_A,4,18
+validated,config_A,5,16

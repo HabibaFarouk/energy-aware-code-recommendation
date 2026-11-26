@@ -1,0 +1,14 @@
+{
+  "run_id": "20261126T150242+0100_ff0d967d",
+  "dataset": "significant",
+  "feature_config": "config_A",
+  "runtime_and_process_resource_measurements_available": true,
+  "actual_energy_available": true,
+  "actual_energy_source": "RAPL",
+  "actual_energy_scope": "CPU package counters exposed by Linux powercap.",
+  "training_repetitions_requested": 10,
+  "inference_repetitions_requested": 10,
+  "inference_passes_per_repetition": 1,
+  "measurement_datetime": "2026-11-26T15:02:42.296875+01:00",
+  "results_directory": "Results/resource_measurements/20261126T150242+0100_ff0d967d/significant/config_A"
+}

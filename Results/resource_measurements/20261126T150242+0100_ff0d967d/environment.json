@@ -1,0 +1,30 @@
+{
+  "run_id": "20261126T150242+0100_ff0d967d",
+  "measurement_datetime": "2026-11-26T15:02:42.296875+01:00",
+  "operating_system": "Linux-6.12.38+deb13-amd64-x86_64-with-glibc2.41",
+  "system": "Linux",
+  "processor": "x86_64",
+  "physical_cpu_cores": 4,
+  "logical_cpu_threads": 8,
+  "cpu_frequency_mhz": 1325.00625,
+  "total_ram_gb": 125.703,
+  "available_ram_at_start_gb": 113.089,
+  "windows_gpu_names": [],
+  "pytorch_cuda_available": false,
+  "pytorch_cuda_devices": [],
+  "python_version": "3.13.5 (main, Aug 10 2026, 12:06:59) [GCC 14.2.0]",
+  "library_versions": {
+    "psutil": "7.2.2",
+    "numpy": "2.5.5",
+    "pandas": "3.1.1",
+    "scikit-learn": "1.9.1",
+    "xgboost": "3.4.1",
+    "torch": "2.15.0",
+    "transformers": "5.24.1",
+    "codecarbon": "3.3.3",
+    "pyarrow": "26.0.1"
+  },
+  "process_memory_measurement": "Python process RSS, sampled periodically with psutil; sampling can miss brief peaks.",
+  "process_cpu_measurement": "Python process user/system CPU-time delta divided by task wall time and logical CPU threads; not system CPU utilization.",
+  "sampling_interval_seconds": 0.1
+}
